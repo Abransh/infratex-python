@@ -1,6 +1,6 @@
 # Infratex Python SDK
 
-Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs or ordered image batches, build search indexes, and generate AI-powered answers grounded in your documents.
+Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, and extract structured fields.
 
 ## Installation
 
@@ -15,39 +15,30 @@ from infratex import Infratex
 
 client = Infratex(api_key="infratex_sk_...")
 
-# Upload and parse a PDF
-doc = client.documents.upload("report.pdf")
+# Upload and parse a PDF (waits for parsing by default)
+doc = client.documents.upload("report.pdf", method="standard")
 print(doc.id, doc.status, doc.page_count)
 
-# Upload an ordered image batch as document pages
-deck = client.documents.upload_images(["page-1.png", "page-2.png"], method="max")
-print(deck.id, deck.status, deck.page_count)
+# Index for retrieval, then wait until it's ready
+client.documents.index(doc.id, method="hybrid")
 
-# Index for search
-# The SDK waits for the queued index by default.
-index = client.documents.index(doc.id, method="vector")
-
-# Search
-# Searches and responses require a ready index that matches the selected method.
-results = client.searches.create(
-    query="revenue growth",
-    method="vector",
+# Stream a cited answer
+for event in client.responses.create(
+    message="Summarize the key findings with citations.",
+    method="hybrid",
+    model="fast",
     document_ids=[doc.id],
-)
-for r in results:
-    print(r.score, r.content[:100])
-
-# AI response (streamed)
-for event in client.responses.create(message="Summarize the key findings", document_ids=[doc.id]):
-    if event.type == "text":
-        print(event.content, end="")
-    elif event.type == "sources":
+):
+    if event.type == "sources":
         print("Sources:", event.content)
+    elif event.type == "text":
+        print(event.content, end="")
 ```
 
 ## Authentication
 
-Pass your API key directly or set the `INFRATEX_API_KEY` environment variable:
+Pass your API key directly or set the `INFRATEX_API_KEY` environment variable. Use a
+server-side key (`infratex_sk_...`); keep it out of browser code.
 
 ```python
 # Explicit
@@ -59,105 +50,143 @@ os.environ["INFRATEX_API_KEY"] = "infratex_sk_..."
 client = Infratex()
 ```
 
+## Parse methods
+
+| Method | Credits / page | Notes |
+|--------|----------------|-------|
+| `standard` | 1 | Default. Fast, high-quality Markdown. |
+| `max` | 3 | Gemini parser; adds brief `[visual-note: ...]` lines for charts, figures, and photos. |
+| `infratex-phi` | 3 | Self-hosted vision engine. |
+| `standard-ultra-2` | 3 | GPT vision parser (API-only). |
+
+Both `documents.upload(...)` and `documents.upload_images(...)` accept any of these
+methods and default to `standard`.
+
 ## Resources
 
 ### Documents
 
 ```python
-# Upload
-# The SDK keeps this ergonomic one-call flow even though the raw HTTP API
-# now creates the document first and polls until parsing is complete.
+# Upload a PDF — waits for parsing and returns the markdown-bearing document.
 doc = client.documents.upload("report.pdf")
-doc = client.documents.upload("report.pdf", method="standard", collection_id="col-id")
-doc = client.documents.upload("deck.pdf", method="max")
+doc = client.documents.upload("report.pdf", method="max", collection_id="col-id")
 
-# Upload ordered images instead of a PDF
-images = client.documents.upload_images(["page-1.png", "page-2.png"])
-images = client.documents.upload_images(["page-1.png", "page-2.png"], method="max", collection_id="col-id")
+# Upload an ordered image batch as document pages (file order = page order).
+images = client.documents.upload_images(["page-1.png", "page-2.png"], method="standard")
 
-# Queue-first upload if you want to manage the parse lifecycle yourself
+# Queue-first if you want to manage the parse lifecycle yourself.
 queued = client.documents.upload("report.pdf", wait=False)
-doc = client.documents.get(queued.id, wait=True)
+doc = client.documents.wait_until_parsed(queued.id)   # or: client.documents.get(queued.id, wait=True)
 
-# Queue-first image upload follows the same pattern
-queued_images = client.documents.upload_images(["page-1.png", "page-2.png"], wait=False)
-images = client.documents.get(queued_images.id, wait=True)
-
-# List
+# List / get / markdown
 docs = client.documents.list(limit=50, offset=0, collection_id="col-id")
 print(docs.total)
-for d in docs:
-    print(d.filename)
-
-# Get
 doc = client.documents.get("doc-id")
-
-# Download markdown
 md = client.documents.markdown("doc-id")
+
+# Rename or move between collections
+client.documents.update("doc-id", filename="q3-report.pdf")
+client.documents.update("doc-id", collection_id="col-id")
+client.documents.update("doc-id", remove_collection=True)
 
 # Delete
 client.documents.delete("doc-id")
 
-# Index
-# By default this waits until the queued method-specific index reaches "indexed".
-index = client.documents.index("doc-id", method="hybrid")
+# Index — waits until the method-specific index reaches "indexed".
+client.documents.index("doc-id", method="hybrid")
 
-# Queue-first behavior if you want to manage polling yourself
-queued = client.documents.index("doc-id", method="hybrid", wait=False)
+# Queue-first indexing if you want to manage polling yourself.
+client.documents.index("doc-id", method="hybrid", wait=False)
 indexes = client.documents.list_indexes("doc-id")
-index = client.documents.get_index("doc-id", "hybrid", wait=True)
+index = client.documents.wait_until_indexed("doc-id", method="hybrid")
 ```
 
 ### Searches
 
+Retrieve cited context without generating text. Send one scope: `document_ids` **or**
+`collection_id`.
+
 ```python
 results = client.searches.create(
-    query="What is the EBITDA?",
-    method="vector",
+    query="Find indemnity carve-outs",
+    method="hybrid",
     limit=5,
     document_ids=["doc-id"],
 )
-for r in results:
-    print(r.score, r.content[:200])
+for hit in results:
+    print(hit.document_name, hit.score, hit.content[:160])
 ```
 
 ### Responses (streaming)
 
+Stream answers grounded in indexed documents. Events arrive in order: `sources`,
+`thinking` (only when `reasoning=True`), `text` deltas, then `done`.
+
 ```python
 for event in client.responses.create(
-    message="Summarize the report",
+    message="What are the top risks?",
     method="hybrid",
-    limit=5,
-    document_ids=["doc-id"],
+    model="fast",       # "fast" (default) or "pro"
+    collection_id="col-id",
+    limit=8,
+    reasoning=False,
 ):
-    if event.type == "text":
+    if event.type == "sources":
+        sources = event.content
+    elif event.type == "text":
         print(event.content, end="")
-    elif event.type == "sources":
-        print("Sources:", event.content)
     elif event.type == "done":
-        print("\n--- Done ---")
+        print("\n--- done ---")
 ```
 
 ```python
 # Managed multi-turn thread with persisted scope
-conv = client.conversations.create(
-    title="Quarterly Analysis",
-    collection_id="col-id",
-)
+conv = client.conversations.create(title="Quarterly Analysis", collection_id="col-id")
 
 for event in client.responses.create(
     message="How does that compare with the previous quarter?",
     method="hybrid",
     model="pro",
-    conversation_id=conv.id,
+    conversation_id=conv.id,   # scope comes from the conversation; omit document_ids/collection_id
 ):
     if event.type == "text":
         print(event.content, end="")
 ```
 
-`documents.upload(...)`, `documents.upload_images(...)`, and `documents.index(...)` now follow the same contract: they wait by default, support queue-first control with `wait=False`, and expose a corresponding getter with `wait=True` when you want to resume later.
+### Extractions
 
-Use `method="max"` when you want the Gemini parser to preserve the same extracted text while also appending brief `[visual-note: ...]` lines for meaningful charts, figures, screenshots, and photos.
+Extract structured fields from a parsed document. Provide inline field definitions, or
+reference a `template_id` created in the dashboard — exactly one is required.
+
+```python
+run = client.extractions.create(
+    "doc-id",
+    model="fast",              # "fast" (default) or "pro"
+    include_evidence=True,
+    inline_fields=[
+        {"name": "counterparty", "type": "string", "description": "Legal name of the counterparty"},
+        {"name": "effective_date", "type": "date", "description": "Contract effective date"},
+        {"name": "termination_fee", "type": "number", "description": "Any explicit termination fee"},
+    ],
+)
+
+result = client.extractions.wait_until_done(run.id, include_evidence=True)
+print(result.result)     # {"counterparty": "...", "effective_date": "...", ...}
+print(result.evidence)   # per-field evidence (present because include_evidence=True)
+
+# Reference a dashboard-managed template instead of inline fields
+run = client.extractions.create("doc-id", template_id="tpl-id")
+
+# List prior runs, then export tabular results
+runs = client.extractions.list("doc-id")
+export = client.extractions.export(run.id, format="xlsx")   # or "csv"
+export.save("results.xlsx")
+```
+
+Field definitions support nested shapes: `type` may be `string`, `number`, `integer`,
+`boolean`, `date`, `enum`, `object`, or `array`. Use `enum_values` for `enum`,
+`properties` (a list of fields) for `object`, and `items` (a single field) for `array`.
+Extraction templates are created and managed in the dashboard.
 
 ### Collections
 
@@ -174,7 +203,7 @@ client.collections.delete("col-id")
 ```python
 conv = client.conversations.create(title="Analysis", collection_id="col-id")
 convs = client.conversations.list()
-conv = client.conversations.get("conv-id")  # includes messages
+conv = client.conversations.get("conv-id")   # includes messages
 client.conversations.delete("conv-id")
 ```
 
@@ -182,7 +211,10 @@ client.conversations.delete("conv-id")
 
 ```python
 account = client.account.get()
-print(account.tenant["email"])
+print(account.tenant["email"], account.tenant["credit_balance_micros"])
+
+settings = client.account.settings()
+print(settings.allow_overage, settings.monthly_spend_cap_micros)
 
 billing = client.billing.get()
 print(billing.balance_micros)
@@ -209,7 +241,7 @@ except InfratexError as e:
 client = Infratex(
     api_key="infratex_sk_...",
     base_url="https://api.infratex.io",  # custom base URL
-    timeout=60.0,                         # request timeout in seconds
+    timeout=300.0,                        # request / poll timeout in seconds
 )
 
 # Use as a context manager

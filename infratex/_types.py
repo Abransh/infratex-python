@@ -82,7 +82,6 @@ class UploadedDocument(_Base):
     status: str
     method: str
     filename: str
-    pipeline: Optional[str]
     page_count: Optional[int]
     markdown: Optional[str]
     extraction_ms: int
@@ -223,8 +222,50 @@ class ConversationMessage(_Base):
 
 
 # ---------------------------------------------------------------------------
+# Extractions
+# ---------------------------------------------------------------------------
+class ExtractionRun(_Base):
+    id: str
+    document_id: str
+    template_id: Optional[str]
+    status: str
+    tier: Optional[str]
+    model: str
+    result: Optional[Dict[str, Any]]
+    evidence: Optional[Dict[str, Any]]
+    processing_time_ms: Optional[int]
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
+    error_message: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+class ExtractionRunList(_Base):
+    runs: List[ExtractionRun]
+    total: int
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.runs = [ExtractionRun(r) for r in data.get("runs", [])]
+
+    def __iter__(self):  # type: ignore
+        return iter(self.runs)
+
+    def __len__(self) -> int:
+        return len(self.runs)
+
+
+# ---------------------------------------------------------------------------
 # Account & Billing
 # ---------------------------------------------------------------------------
+class AccountSettings(_Base):
+    allow_overage: bool
+    monthly_spend_cap_micros: Optional[int]
+    low_balance_threshold_micros: int
+    has_payment_method: bool
+
+
 class Tenant(_Base):
     id: str
     name: str
@@ -232,6 +273,8 @@ class Tenant(_Base):
     credit_balance_micros: int
     is_admin: bool
     is_frozen: bool
+    frozen_reason: Optional[str]
+    deleted_at: Optional[str]
     created_at: str
 
 

@@ -12,7 +12,10 @@ from .._types import DocumentList, Document, Index, UploadedDocument
 if TYPE_CHECKING:
     from .._http import HTTPClient
 
-ParseMethod = Literal["legacy", "experimental", "standard", "max", "cost-efficient"]
+ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi"]
+IndexMethod = Literal["vector", "hybrid"]
+
+_PARSED_STATES = {"parsed", "indexed", "done"}
 
 
 class Documents:
@@ -29,7 +32,6 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
-        pipeline: Optional[str] = None,
         collection_id: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
@@ -40,7 +42,6 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
-        pipeline: Optional[str] = None,
         collection_id: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
@@ -50,7 +51,6 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
-        pipeline: Optional[str] = None,
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
@@ -61,9 +61,9 @@ class Documents:
         file_path:
             Local path to the PDF file.
         method:
-            Parsing method (``"standard"``, ``"max"``, ``"cost-efficient"``, ``"experimental"``, ``"legacy"``).
-        pipeline:
-            Optional sub-pipeline (``"traditional"``, ``"math"``).
+            Parsing method. One of ``"standard"`` (1 credit/page),
+            ``"max"`` (3), ``"infratex-phi"`` (3), or ``"standard-ultra-2"`` (3).
+            Defaults to ``"standard"`` server-side.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -77,8 +77,6 @@ class Documents:
             data: Dict[str, Any] = {}
             if method is not None:
                 data["method"] = method
-            if pipeline is not None:
-                data["pipeline"] = pipeline
             if collection_id is not None:
                 data["collection_id"] = collection_id
 
@@ -91,14 +89,14 @@ class Documents:
         created = Document(resp)
         if not wait:
             return created
-        return self.get(created.id, wait=True)
+        return self._wait_for_uploaded_document(created.id)
 
     @overload
     def upload_images(
         self,
         file_paths: Sequence[str],
         *,
-        method: Literal["standard", "max"] | None = None,
+        method: Optional[ParseMethod] = None,
         collection_id: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
@@ -108,7 +106,7 @@ class Documents:
         self,
         file_paths: Sequence[str],
         *,
-        method: Literal["standard", "max"] | None = None,
+        method: Optional[ParseMethod] = None,
         collection_id: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
@@ -117,7 +115,7 @@ class Documents:
         self,
         file_paths: Sequence[str],
         *,
-        method: Literal["standard", "max"] | None = None,
+        method: Optional[ParseMethod] = None,
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
@@ -126,9 +124,11 @@ class Documents:
         Parameters
         ----------
         file_paths:
-            Ordered local paths to PNG, JPEG, or WebP image files.
+            Ordered local paths to PNG, JPEG, or WebP image files. The order of
+            the files is treated as the page order of the document.
         method:
-            Parsing method. Image uploads support only ``"standard"`` and ``"max"``.
+            Parsing method: ``"standard"``, ``"max"``, ``"infratex-phi"``, or
+            ``"standard-ultra-2"``. Defaults to ``"standard"``.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -140,11 +140,9 @@ class Documents:
         if not paths:
             raise ValueError("file_paths must contain at least one image path")
 
-        resolved_method = method or "standard"
-        if resolved_method not in {"standard", "max"}:
-            raise ValueError("image uploads support only 'standard' and 'max'")
-
-        data: Dict[str, Any] = {"method": resolved_method}
+        data: Dict[str, Any] = {}
+        if method is not None:
+            data["method"] = method
         if collection_id is not None:
             data["collection_id"] = collection_id
 
@@ -171,7 +169,7 @@ class Documents:
         created = Document(resp)
         if not wait:
             return created
-        return self.get(created.id, wait=True)
+        return self._wait_for_uploaded_document(created.id)
 
     def list(
         self,
@@ -210,7 +208,11 @@ class Documents:
     def get(self, document_id: str, *, wait: Literal[True]) -> UploadedDocument: ...
 
     def get(self, document_id: str, *, wait: bool = False) -> Union[Document, UploadedDocument]:
-        """Retrieve a single document by ID."""
+        """Retrieve a single document by ID.
+
+        When ``wait=True``, poll until parsing completes and return the
+        markdown-bearing :class:`UploadedDocument`.
+        """
         if wait:
             return self._wait_for_uploaded_document(document_id)
         resp = self._client.request("GET", "/api/v1/documents/{}".format(document_id))
@@ -220,19 +222,57 @@ class Documents:
         """Download the parsed markdown for a document."""
         return self._client.request_text("GET", "/api/v1/documents/{}/markdown".format(document_id))
 
+    def update(
+        self,
+        document_id: str,
+        *,
+        filename: Optional[str] = None,
+        collection_id: Optional[str] = None,
+        remove_collection: bool = False,
+    ) -> Document:
+        """Rename a document or change its collection assignment.
+
+        Pass ``filename`` to rename, ``collection_id`` to move the document into
+        a collection, or ``remove_collection=True`` to detach it from its
+        current collection.
+        """
+        if collection_id is not None and remove_collection:
+            raise ValueError("collection_id and remove_collection cannot be used together")
+
+        body: Dict[str, Any] = {}
+        if filename is not None:
+            body["filename"] = filename
+        if collection_id is not None:
+            body["collection_id"] = collection_id
+        if remove_collection:
+            body["remove_collection"] = True
+
+        if not body:
+            raise ValueError("update requires filename, collection_id, or remove_collection")
+
+        resp = self._client.request(
+            "PATCH",
+            "/api/v1/documents/{}".format(document_id),
+            json_body=body,
+        )
+        return Document(resp)
+
+    def wait_until_parsed(self, document_id: str) -> UploadedDocument:
+        """Block until the document finishes parsing and return its markdown payload."""
+        return self._wait_for_uploaded_document(document_id)
+
     def _wait_for_uploaded_document(self, document_id: str) -> UploadedDocument:
         deadline = time.monotonic() + self._client.timeout_seconds
 
         while True:
             document = self.get(document_id, wait=False)
-            if document.status in {"done", "parsed", "indexed"}:
+            if document.status in _PARSED_STATES:
                 return UploadedDocument(
                     {
                         "id": document.id,
                         "status": document.status,
                         "method": document.method,
                         "filename": document.filename,
-                        "pipeline": document.pipeline,
                         "page_count": document.page_count,
                         "markdown": self.markdown(document_id),
                         "extraction_ms": document.processing_time_ms or 0,
@@ -262,7 +302,7 @@ class Documents:
         self,
         document_id: str,
         *,
-        method: str = "vector",
+        method: IndexMethod = "vector",
         wait: bool = True,
     ) -> Index:
         """Create a search index for a document.
@@ -284,7 +324,7 @@ class Documents:
         created = Index(resp)
         if not wait:
             return created
-        return self.get_index(document_id, method, wait=True)
+        return self.wait_until_indexed(document_id, method=method)
 
     def list_indexes(self, document_id: str) -> List[Index]:
         """List index resources for a document."""
@@ -294,7 +334,7 @@ class Documents:
     def get_index(
         self,
         document_id: str,
-        method: str,
+        method: IndexMethod,
         *,
         wait: bool = False,
     ) -> Index:
@@ -305,9 +345,10 @@ class Documents:
                 "/api/v1/documents/{}/indexes/{}".format(document_id, method),
             )
             return Index(resp)
-        return self._wait_for_document_index(document_id, method)
+        return self.wait_until_indexed(document_id, method=method)
 
-    def _wait_for_document_index(self, document_id: str, method: str) -> Index:
+    def wait_until_indexed(self, document_id: str, *, method: IndexMethod = "vector") -> Index:
+        """Block until the method-specific index reaches ``indexed``."""
         deadline = time.monotonic() + self._client.timeout_seconds
 
         while True:

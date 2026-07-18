@@ -11,6 +11,7 @@ from ._http import HTTPClient
 from .resources.documents import Documents
 from .resources.searches import Searches
 from .resources.responses import Responses
+from .resources.extractions import Extractions
 from .resources.collections import Collections
 from .resources.conversations import Conversations
 from .resources.account import AccountResource
@@ -38,6 +39,7 @@ class Infratex:
     documents: Documents
     searches: Searches
     responses: Responses
+    extractions: Extractions
     collections: Collections
     conversations: Conversations
     account: AccountResource
@@ -68,6 +70,7 @@ class Infratex:
         self.documents = Documents(self._http)
         self.searches = Searches(self._http)
         self.responses = Responses(self._http)
+        self.extractions = Extractions(self._http)
         self.collections = Collections(self._http)
         self.conversations = Conversations(self._http)
         self.account = AccountResource(self._http)

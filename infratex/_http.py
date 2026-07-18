@@ -3,16 +3,47 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterator, Optional
 
 import httpx
 
 from ._version import __version__
 
-__all__ = ["HTTPClient", "InfratexError"]
+__all__ = ["HTTPClient", "InfratexError", "BinaryResponse"]
 
 _DEFAULT_BASE_URL = "https://api.infratex.io"
 _DEFAULT_TIMEOUT = 300.0  # seconds
+
+
+class BinaryResponse:
+    """A downloaded binary payload with its suggested filename."""
+
+    __slots__ = ("content", "filename", "content_type")
+
+    def __init__(
+        self,
+        content: bytes,
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> None:
+        self.content = content
+        self.filename = filename
+        self.content_type = content_type
+
+    def save(self, path: str) -> str:
+        """Write the payload to ``path`` and return the path written."""
+        with open(path, "wb") as f:
+            f.write(self.content)
+        return path
+
+    def __len__(self) -> int:
+        return len(self.content)
+
+    def __repr__(self) -> str:
+        return "BinaryResponse(filename={!r}, content_type={!r}, bytes={})".format(
+            self.filename, self.content_type, len(self.content)
+        )
 
 
 class InfratexError(Exception):
@@ -120,6 +151,33 @@ class HTTPClient:
         response = self._client.request(method, path)
         if response.status_code >= 400:
             self._raise_for_status(response)
+
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> "BinaryResponse":
+        """Send an HTTP request and return the raw response bytes + filename."""
+        if params:
+            params = {k: v for k, v in params.items() if v is not None}
+
+        response = self._client.request(method, path, params=params or None)
+        if response.status_code >= 400:
+            self._raise_for_status(response)
+
+        filename = None
+        disposition = response.headers.get("content-disposition", "")
+        match = re.search(r'filename="?([^"]+)"?', disposition, re.IGNORECASE)
+        if match:
+            filename = match.group(1)
+
+        return BinaryResponse(
+            content=response.content,
+            filename=filename,
+            content_type=response.headers.get("content-type"),
+        )
 
     def stream_sse(
         self,
