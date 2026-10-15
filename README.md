@@ -204,6 +204,10 @@ print(result.evidence)   # per-field evidence (present because include_evidence=
 # Reference a dashboard-managed template instead of inline fields
 run = client.extractions.create("doc-id", template_id="tpl-id")
 
+# Exhaustive mode for list fields where every item matters (footnotes, line items):
+# reads every part of the document for array fields, then checks for missed items.
+run = client.extractions.create("doc-id", template_id="tpl-id", completeness="exhaustive")
+
 # List prior runs, then export tabular results
 runs = client.extractions.list("doc-id")
 export = client.extractions.export(run.id, format="xlsx")   # or "csv"
@@ -213,7 +217,9 @@ export.save("results.xlsx")
 Field definitions support nested shapes: `type` may be `string`, `number`, `integer`,
 `boolean`, `date`, `enum`, `object`, or `array`. Use `enum_values` for `enum`,
 `properties` (a list of fields) for `object`, and `items` (a single field) for `array`.
-Extraction templates are created and managed in the dashboard.
+Extraction templates are created and managed in the dashboard. `completeness` is
+`"standard"` (default) or `"exhaustive"`; exhaustive runs are slower and bill more tokens,
+and the run reports the mode it used in `run.completeness`.
 
 ### Collections
 

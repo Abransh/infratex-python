@@ -263,6 +263,7 @@ class ExtractionRun(_Base):
     status: str
     tier: Optional[str]
     model: str
+    completeness: str
     result: Optional[Dict[str, Any]]
     evidence: Optional[Dict[str, Any]]
     processing_time_ms: Optional[int]
