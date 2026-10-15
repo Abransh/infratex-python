@@ -103,6 +103,7 @@ print(docs.total)
 doc = client.documents.get("doc-id")
 md = client.documents.markdown("doc-id")
 md = client.documents.markdown("doc-id", table_format="html")   # OTSL tables as <table>
+md = client.documents.markdown("doc-id", figure_descriptions=False)   # drop figure <description>s
 
 # Rename or move between collections
 client.documents.update("doc-id", filename="q3-report.pdf")

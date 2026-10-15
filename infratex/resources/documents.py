@@ -248,6 +248,7 @@ class Documents:
         document_id: str,
         *,
         table_format: Optional[TableFormat] = None,
+        figure_descriptions: Optional[bool] = None,
     ) -> str:
         """Download the parsed markdown for a document.
 
@@ -260,8 +261,15 @@ class Documents:
             every OTSL block to a ``<table>``. Omitted by default, so the server
             default (``otsl``) applies. Conversion runs one way only: a document
             parsed with ``table_format="html"`` is always served as HTML.
+        figure_descriptions:
+            Pass ``False`` to leave the generated ``<description>`` out of
+            figure blocks (the server default keeps them). Omitted unless set,
+            so servers that predate the parameter are unaffected.
         """
-        params: Dict[str, Any] = {"table_format": table_format}
+        params: Dict[str, Any] = {
+            "table_format": table_format,
+            "figure_descriptions": _bool_param(figure_descriptions),
+        }
         return self._client.request_text(
             "GET",
             "/api/v1/documents/{}/markdown".format(document_id),
@@ -414,6 +422,12 @@ class Documents:
                     code="index_timeout",
                 )
             time.sleep(self._poll_interval_seconds)
+
+
+def _bool_param(value: Optional[bool]) -> Optional[str]:
+    if value is None:
+        return None
+    return "true" if value else "false"
 
 
 def _guess_document_mime_type(filename: str) -> str:

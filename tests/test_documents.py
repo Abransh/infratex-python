@@ -112,3 +112,16 @@ def test_markdown_forwards_table_format(make_client: ClientFactory) -> None:
     client.documents.markdown("doc-1", table_format="html")
 
     assert dict(recorder.last.url.params) == {"table_format": "html"}
+
+
+def test_markdown_sends_figure_descriptions_only_when_set(make_client: ClientFactory) -> None:
+    client, recorder = make_client(_markdown)
+
+    client.documents.markdown("doc-1", figure_descriptions=False)
+    client.documents.markdown("doc-1", table_format="html", figure_descriptions=True)
+    client.documents.markdown("doc-1", table_format="html")
+
+    first, second, third = (dict(r.url.params) for r in recorder.requests)
+    assert first == {"figure_descriptions": "false"}
+    assert second == {"table_format": "html", "figure_descriptions": "true"}
+    assert third == {"table_format": "html"}
