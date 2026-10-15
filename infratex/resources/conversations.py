@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .._scope import validate_scope
 from .._types import Conversation
@@ -29,7 +29,7 @@ class Conversations:
             document_ids=document_ids,
             collection_id=collection_id,
         )
-        body = {"title": title}
+        body: Dict[str, Any] = {"title": title}
         if normalized_document_ids is not None:
             body["document_ids"] = normalized_document_ids
         if collection_id is not None:
