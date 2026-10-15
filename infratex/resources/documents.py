@@ -6,8 +6,8 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Sequence, Union, overload
 
-from .._http import InfratexError
-from .._types import DocumentList, Document, Index, UploadedDocument
+from .._http import BinaryResponse, InfratexError
+from .._types import DocumentFigureList, DocumentList, Document, Index, UploadedDocument
 
 if TYPE_CHECKING:
     from .._http import HTTPClient
@@ -274,6 +274,35 @@ class Documents:
             "GET",
             "/api/v1/documents/{}/markdown".format(document_id),
             params=params,
+        )
+
+    def list_figures(self, document_id: str) -> DocumentFigureList:
+        """List the figures cropped from a parsed PDF.
+
+        Each :class:`~infratex.DocumentFigure` carries its page, type, detection
+        score, bounding box in PDF points and the ``src`` its figure block in
+        the Markdown carries. Empty when the document has no figures or they
+        could not be matched reliably.
+        """
+        resp = self._client.request("GET", "/api/v1/documents/{}/figures".format(document_id))
+        return DocumentFigureList(resp)
+
+    def download_figure(self, document_id: str, name: str) -> BinaryResponse:
+        """Download one cropped figure as PNG bytes.
+
+        ``name`` is a figure's ``name`` (``p12-1.png``); its ``src``
+        (``figures/p12-1.png``) is accepted too. Call ``.save(path)`` on the
+        returned :class:`~infratex.BinaryResponse` to write it to disk.
+        """
+        filename = name.rsplit("/", 1)[-1]
+        resp = self._client.request_bytes(
+            "GET",
+            "/api/v1/documents/{}/figures/{}".format(document_id, filename),
+        )
+        return BinaryResponse(
+            resp.content,
+            filename=resp.filename or filename,
+            content_type=resp.content_type,
         )
 
     def update(

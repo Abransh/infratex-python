@@ -104,6 +104,38 @@ class DocumentList(_Base):
         return len(self.documents)
 
 
+class DocumentFigure(_Base):
+    """A figure cropped from a parsed PDF.
+
+    ``bbox`` is ``[x1, y1, x2, y2]`` in PDF points (1/72 inch), origin top-left
+    of the page. ``src`` matches the ``src`` of the figure block in the
+    Markdown (``figures/p12-1.png``); ``name`` is its file name.
+    """
+
+    name: str
+    src: str
+    page: int
+    index: int
+    type: str
+    score: float
+    bbox: List[float]
+
+
+class DocumentFigureList(_Base):
+    document_id: str
+    figures: List[DocumentFigure]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.figures = [DocumentFigure(f) for f in data.get("figures", [])]
+
+    def __iter__(self):  # type: ignore
+        return iter(self.figures)
+
+    def __len__(self) -> int:
+        return len(self.figures)
+
+
 # ---------------------------------------------------------------------------
 # Indexes
 # ---------------------------------------------------------------------------

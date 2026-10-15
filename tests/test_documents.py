@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+import pytest
+
+from infratex import BinaryResponse, DocumentFigure, InfratexError
 
 from .conftest import ClientFactory, form_value, multipart_parts
 
@@ -125,3 +128,82 @@ def test_markdown_sends_figure_descriptions_only_when_set(make_client: ClientFac
     assert first == {"figure_descriptions": "false"}
     assert second == {"table_format": "html", "figure_descriptions": "true"}
     assert third == {"table_format": "html"}
+
+
+_FIGURES = {
+    "document_id": "doc-1",
+    "figures": [
+        {
+            "name": "p2-1.png",
+            "src": "figures/p2-1.png",
+            "page": 2,
+            "index": 1,
+            "type": "chart",
+            "score": 0.93,
+            "bbox": [72.0, 100.5, 300.0, 280.25],
+        }
+    ],
+}
+
+
+def test_list_figures_returns_typed_figures(make_client: ClientFactory) -> None:
+    client, recorder = make_client(lambda request: httpx.Response(200, json=_FIGURES))
+
+    figures = client.documents.list_figures("doc-1")
+
+    assert recorder.last.url.path == "/api/v1/documents/doc-1/figures"
+    assert figures.document_id == "doc-1"
+    assert len(figures) == 1
+    (figure,) = list(figures)
+    assert isinstance(figure, DocumentFigure)
+    assert (figure.name, figure.src, figure.page, figure.index) == ("p2-1.png", "figures/p2-1.png", 2, 1)
+    assert figure.type == "chart"
+    assert figure.score == 0.93
+    assert figure.bbox == [72.0, 100.5, 300.0, 280.25]
+
+
+def test_list_figures_handles_documents_without_figures(make_client: ClientFactory) -> None:
+    client, _ = make_client(
+        lambda request: httpx.Response(200, json={"document_id": "doc-1", "figures": []})
+    )
+
+    assert len(client.documents.list_figures("doc-1")) == 0
+
+
+_PNG = b"\x89PNG\r\n\x1a\nfigure-bytes"
+
+
+def _png(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, content=_PNG, headers={"content-type": "image/png"})
+
+
+def test_download_figure_returns_png_bytes(make_client: ClientFactory, tmp_path: Path) -> None:
+    client, recorder = make_client(_png)
+
+    figure = client.documents.download_figure("doc-1", "p2-1.png")
+
+    assert recorder.last.url.path == "/api/v1/documents/doc-1/figures/p2-1.png"
+    assert isinstance(figure, BinaryResponse)
+    assert figure.content == _PNG
+    assert figure.content_type == "image/png"
+    assert figure.filename == "p2-1.png"
+    saved = figure.save(str(tmp_path / "out.png"))
+    assert Path(saved).read_bytes() == _PNG
+
+
+def test_download_figure_accepts_the_markdown_src(make_client: ClientFactory) -> None:
+    client, recorder = make_client(_png)
+
+    client.documents.download_figure("doc-1", "figures/p2-1.png")
+
+    assert recorder.last.url.path == "/api/v1/documents/doc-1/figures/p2-1.png"
+
+
+def test_download_figure_raises_on_missing_figure(make_client: ClientFactory) -> None:
+    client, _ = make_client(lambda request: httpx.Response(404, json={"detail": "Figure not found"}))
+
+    with pytest.raises(InfratexError) as excinfo:
+        client.documents.download_figure("doc-1", "p9-9.png")
+
+    assert excinfo.value.status_code == 404
+    assert str(excinfo.value) == "Figure not found"

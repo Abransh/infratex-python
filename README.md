@@ -105,6 +105,12 @@ md = client.documents.markdown("doc-id")
 md = client.documents.markdown("doc-id", table_format="html")   # OTSL tables as <table>
 md = client.documents.markdown("doc-id", figure_descriptions=False)   # drop figure <description>s
 
+# Figures cropped from a parsed PDF (any method). The figure block in the markdown
+# carries the same src (figures/p12-1.png); bbox is [x1, y1, x2, y2] in PDF points.
+for figure in client.documents.list_figures("doc-id"):
+    print(figure.page, figure.type, figure.src, figure.bbox)
+    client.documents.download_figure("doc-id", figure.name).save(figure.name)   # PNG
+
 # Rename or move between collections
 client.documents.update("doc-id", filename="q3-report.pdf")
 client.documents.update("doc-id", collection_id="col-id")
