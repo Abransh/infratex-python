@@ -251,7 +251,24 @@ print(settings.allow_overage, settings.monthly_spend_cap_micros)
 
 billing = client.billing.get()
 print(billing.balance_micros)
+
+# The credit ledger, newest first: every charge, refund, grant and top-up with the
+# balance after it. Amounts are in micro-euros (1 credit = 5,000).
+page = client.billing.list_transactions(since="2026-10-01T00:00:00Z", limit=100)  # limit <= 500
+for tx in page:
+    print(tx.created_at, tx.transaction_type, tx.amount_micros, tx.description)
+older = client.billing.list_transactions(before=page.next_before) if page.next_before else None
+
+# Or let the SDK follow next_before for you.
+from datetime import datetime, timezone
+
+for tx in client.billing.iter_transactions(since=datetime(2026, 10, 1, tzinfo=timezone.utc)):
+    print(tx.source_id, tx.amount_micros)
 ```
+
+`since` / `until` / `before` take a timezone-aware `datetime` or an ISO 8601 string. A
+parse charge carries the document id in `source_id` and the file name and billed pages
+in `description` and `metadata`.
 
 ## Error handling
 

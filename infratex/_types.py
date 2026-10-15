@@ -319,6 +319,49 @@ class Account(_Base):
         self.tenant = Tenant(data.get("tenant", {}))
 
 
+class BillingTransaction(_Base):
+    """One credit-ledger entry: a charge, refund, grant or top-up.
+
+    Amounts are in micro-euros (1 credit = 5,000). A parse charge carries the
+    document id in ``source_id`` and the file name and billed pages in
+    ``description`` and ``metadata``.
+    """
+
+    id: str
+    transaction_type: str
+    status: str
+    amount_micros: int
+    balance_after_micros: int
+    currency: str
+    source_type: Optional[str]
+    source_id: Optional[str]
+    description: str
+    created_at: str
+    metadata: Optional[Dict[str, Any]]
+
+
+class BillingTransactionPage(_Base):
+    """A page of the credit ledger, newest first.
+
+    Pass ``next_before`` as ``before`` to fetch the next (older) page; it is
+    ``None`` on the last page.
+    """
+
+    transactions: List[BillingTransaction]
+    next_before: Optional[str]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.transactions = [BillingTransaction(t) for t in data.get("transactions", [])]
+        self.next_before = data.get("next_before")
+
+    def __iter__(self):  # type: ignore
+        return iter(self.transactions)
+
+    def __len__(self) -> int:
+        return len(self.transactions)
+
+
 class BillingSummary(_Base):
     balance_micros: int
     recent_transactions: List[Dict[str, Any]]
