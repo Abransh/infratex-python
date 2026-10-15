@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi", "infratex-gamma"]
 IndexMethod = Literal["vector", "hybrid"]
+TableFormat = Literal["otsl", "html"]
 
 _PARSED_STATES = {"parsed", "indexed", "done"}
 
@@ -34,6 +35,7 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
@@ -44,6 +46,7 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
@@ -53,6 +56,7 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
@@ -69,6 +73,12 @@ class Documents:
             ``"max"`` (3), ``"infratex-phi"`` (3), ``"infratex-gamma"`` (1),
             or ``"standard-ultra-2"`` (3). Defaults to ``"standard"``
             server-side.
+        table_format:
+            Table syntax the parser emits: ``"otsl"`` (server default) or
+            ``"html"``. Stored with the document and not changeable later: a
+            document parsed as ``otsl`` can be read back as either syntax, one
+            parsed as ``html`` only as HTML. ``standard`` always returns
+            Markdown pipe tables.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -82,6 +92,8 @@ class Documents:
             data: Dict[str, Any] = {}
             if method is not None:
                 data["method"] = method
+            if table_format is not None:
+                data["table_format"] = table_format
             if collection_id is not None:
                 data["collection_id"] = collection_id
 
@@ -102,6 +114,7 @@ class Documents:
         file_paths: Sequence[str],
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
@@ -112,6 +125,7 @@ class Documents:
         file_paths: Sequence[str],
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
@@ -121,6 +135,7 @@ class Documents:
         file_paths: Sequence[str],
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
@@ -135,6 +150,8 @@ class Documents:
             Parsing method: ``"standard"``, ``"max"``, ``"infratex-phi"``,
             ``"infratex-gamma"``, or ``"standard-ultra-2"``. Defaults to
             ``"standard"``.
+        table_format:
+            ``"otsl"`` (server default) or ``"html"``; see :meth:`upload`.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -149,6 +166,8 @@ class Documents:
         data: Dict[str, Any] = {}
         if method is not None:
             data["method"] = method
+        if table_format is not None:
+            data["table_format"] = table_format
         if collection_id is not None:
             data["collection_id"] = collection_id
 
@@ -224,9 +243,30 @@ class Documents:
         resp = self._client.request("GET", "/api/v1/documents/{}".format(document_id))
         return Document(resp)
 
-    def markdown(self, document_id: str) -> str:
-        """Download the parsed markdown for a document."""
-        return self._client.request_text("GET", "/api/v1/documents/{}/markdown".format(document_id))
+    def markdown(
+        self,
+        document_id: str,
+        *,
+        table_format: Optional[TableFormat] = None,
+    ) -> str:
+        """Download the parsed markdown for a document.
+
+        Parameters
+        ----------
+        document_id:
+            The parsed document.
+        table_format:
+            ``"otsl"`` returns tables exactly as parsed; ``"html"`` converts
+            every OTSL block to a ``<table>``. Omitted by default, so the server
+            default (``otsl``) applies. Conversion runs one way only: a document
+            parsed with ``table_format="html"`` is always served as HTML.
+        """
+        params: Dict[str, Any] = {"table_format": table_format}
+        return self._client.request_text(
+            "GET",
+            "/api/v1/documents/{}/markdown".format(document_id),
+            params=params,
+        )
 
     def update(
         self,

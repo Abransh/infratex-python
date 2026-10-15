@@ -63,3 +63,52 @@ def test_upload_does_not_reject_other_extensions(make_client: ClientFactory, tmp
     (file_part,) = multipart_parts(recorder.last)["file"]
     assert file_part.filename == "scan"
     assert file_part.content_type == "application/octet-stream"
+
+
+def test_upload_sends_table_format_only_when_given(
+    make_client: ClientFactory, tmp_path: Path
+) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload(str(pdf), method="max", table_format="html", wait=False)
+    client.documents.upload(str(pdf), wait=False)
+
+    with_format, without_format = (multipart_parts(r) for r in recorder.requests)
+    assert form_value(with_format, "table_format") == "html"
+    assert "table_format" not in without_format
+
+
+def test_upload_images_sends_table_format(make_client: ClientFactory, tmp_path: Path) -> None:
+    page = tmp_path / "page-1.png"
+    page.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload_images([str(page)], table_format="otsl", wait=False)
+
+    parts = multipart_parts(recorder.last)
+    assert recorder.last.url.path == "/api/v1/documents/images"
+    assert form_value(parts, "table_format") == "otsl"
+
+
+def _markdown(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, text="<!-- page:1 -->\n# Title", headers={"content-type": "text/markdown"})
+
+
+def test_markdown_sends_no_query_by_default(make_client: ClientFactory) -> None:
+    client, recorder = make_client(_markdown)
+
+    text = client.documents.markdown("doc-1")
+
+    assert text == "<!-- page:1 -->\n# Title"
+    assert recorder.last.url.path == "/api/v1/documents/doc-1/markdown"
+    assert recorder.last.url.query == b""
+
+
+def test_markdown_forwards_table_format(make_client: ClientFactory) -> None:
+    client, recorder = make_client(_markdown)
+
+    client.documents.markdown("doc-1", table_format="html")
+
+    assert dict(recorder.last.url.params) == {"table_format": "html"}

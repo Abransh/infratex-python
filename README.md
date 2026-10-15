@@ -64,6 +64,12 @@ Both `documents.upload(...)` and `documents.upload_images(...)` accept any of th
 methods and default to `standard`. A method that is temporarily unavailable is rejected
 at upload with `InfratexError` (status 503, code `method_unavailable`).
 
+`table_format` (`"otsl"` or `"html"`) sets the table syntax the parser emits; it is
+honoured by `max`, `infratex-phi`, `infratex-gamma` and `standard-ultra-2` (`standard`
+returns Markdown pipe tables). It is stored with the document: a document parsed as
+`otsl` can be read back as either syntax with `documents.markdown(id, table_format=...)`,
+one parsed as `html` only as HTML.
+
 `documents.upload(...)` also accepts a Word `.docx`. It is read from the file itself (no
 model call) and billed at the `standard` price whatever `method` you send; the document
 reports `standard` as its method. Legacy `.doc` and macro-enabled `.docm` files are
@@ -81,6 +87,9 @@ doc = client.documents.upload("report.pdf", method="max", collection_id="col-id"
 # Word documents use the same call.
 doc = client.documents.upload("contract.docx")
 
+# Table syntax: "otsl" (default) or "html". Stored with the document, not changeable later.
+doc = client.documents.upload("report.pdf", method="infratex-gamma", table_format="otsl")
+
 # Upload an ordered image batch as document pages (file order = page order).
 images = client.documents.upload_images(["page-1.png", "page-2.png"], method="standard")
 
@@ -93,6 +102,7 @@ docs = client.documents.list(limit=50, offset=0, collection_id="col-id")
 print(docs.total)
 doc = client.documents.get("doc-id")
 md = client.documents.markdown("doc-id")
+md = client.documents.markdown("doc-id", table_format="html")   # OTSL tables as <table>
 
 # Rename or move between collections
 client.documents.update("doc-id", filename="q3-report.pdf")
