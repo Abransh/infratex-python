@@ -17,6 +17,8 @@ IndexMethod = Literal["vector", "hybrid"]
 
 _PARSED_STATES = {"parsed", "indexed", "done"}
 
+DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
 
 class Documents:
     """Interact with the ``/api/v1/documents`` endpoints."""
@@ -54,12 +56,14 @@ class Documents:
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
-        """Upload and parse a PDF document.
+        """Upload and parse a PDF or Word (``.docx``) document.
 
         Parameters
         ----------
         file_path:
-            Local path to the PDF file.
+            Local path to a PDF or ``.docx`` file. A ``.docx`` is read from the
+            file itself and billed at the ``standard`` price whatever ``method``
+            is sent; the document reports ``standard`` as its method.
         method:
             Parsing method. One of ``"standard"`` (1 credit/page),
             ``"max"`` (3), ``"infratex-phi"`` (3), ``"infratex-gamma"`` (1),
@@ -74,7 +78,7 @@ class Documents:
         """
         filename = os.path.basename(file_path)
         with open(file_path, "rb") as f:
-            files = {"file": (filename, f, "application/pdf")}
+            files = {"file": (filename, f, _guess_document_mime_type(filename))}
             data: Dict[str, Any] = {}
             if method is not None:
                 data["method"] = method
@@ -370,6 +374,16 @@ class Documents:
                     code="index_timeout",
                 )
             time.sleep(self._poll_interval_seconds)
+
+
+def _guess_document_mime_type(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        return "application/pdf"
+    if lower.endswith(".docx"):
+        return DOCX_CONTENT_TYPE
+    # The API identifies the document from its bytes; a neutral type is accepted.
+    return "application/octet-stream"
 
 
 def _guess_image_mime_type(file_path: str) -> str:

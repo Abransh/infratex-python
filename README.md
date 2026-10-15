@@ -1,6 +1,6 @@
 # Infratex Python SDK
 
-Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, and extract structured fields.
+Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs, Word documents, or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, and extract structured fields.
 
 ## Installation
 
@@ -64,6 +64,11 @@ Both `documents.upload(...)` and `documents.upload_images(...)` accept any of th
 methods and default to `standard`. A method that is temporarily unavailable is rejected
 at upload with `InfratexError` (status 503, code `method_unavailable`).
 
+`documents.upload(...)` also accepts a Word `.docx`. It is read from the file itself (no
+model call) and billed at the `standard` price whatever `method` you send; the document
+reports `standard` as its method. Legacy `.doc` and macro-enabled `.docm` files are
+rejected with status 415.
+
 ## Resources
 
 ### Documents
@@ -72,6 +77,9 @@ at upload with `InfratexError` (status 503, code `method_unavailable`).
 # Upload a PDF — waits for parsing and returns the markdown-bearing document.
 doc = client.documents.upload("report.pdf")
 doc = client.documents.upload("report.pdf", method="max", collection_id="col-id")
+
+# Word documents use the same call.
+doc = client.documents.upload("contract.docx")
 
 # Upload an ordered image batch as document pages (file order = page order).
 images = client.documents.upload_images(["page-1.png", "page-2.png"], method="standard")
