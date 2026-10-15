@@ -299,6 +299,16 @@ with Infratex(api_key="infratex_sk_...") as client:
     doc = client.documents.upload("report.pdf")
 ```
 
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+pytest          # tests run against a mocked HTTP transport, no API key needed
+mypy            # strict, over infratex/ and tests/
+ruff check .
+```
+
 ## License
 
 MIT
