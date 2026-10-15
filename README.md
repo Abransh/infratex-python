@@ -54,13 +54,15 @@ client = Infratex()
 
 | Method | Credits / page | Notes |
 |--------|----------------|-------|
-| `standard` | 1 | Default. Fast, high-quality Markdown. |
-| `max` | 3 | Gemini parser; adds brief `[visual-note: ...]` lines for charts, figures, and photos. |
-| `infratex-phi` | 3 | Self-hosted vision engine. |
-| `standard-ultra-2` | 3 | GPT vision parser (API-only). |
+| `standard` | 1 | Default. Fast, high-quality Markdown for most documents. |
+| `max` | 3 | Figures are marked, captioned, and described. For documents where charts, diagrams, and photos carry meaning. |
+| `infratex-phi` | 3 | Proprietary in-house model. Dense tables, financial statements, faithfulness-first OCR. |
+| `infratex-gamma` | 1 | Layout-aware OCR. Faithful text and tables at volume, with a bounding box for every region. |
+| `standard-ultra-2` | 3 | High-fidelity vision for complex nested tables and chart-heavy reports (API-only). |
 
 Both `documents.upload(...)` and `documents.upload_images(...)` accept any of these
-methods and default to `standard`.
+methods and default to `standard`. A method that is temporarily unavailable is rejected
+at upload with `InfratexError` (status 503, code `method_unavailable`).
 
 ## Resources
 

@@ -12,7 +12,7 @@ from .._types import DocumentList, Document, Index, UploadedDocument
 if TYPE_CHECKING:
     from .._http import HTTPClient
 
-ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi"]
+ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi", "infratex-gamma"]
 IndexMethod = Literal["vector", "hybrid"]
 
 _PARSED_STATES = {"parsed", "indexed", "done"}
@@ -62,8 +62,9 @@ class Documents:
             Local path to the PDF file.
         method:
             Parsing method. One of ``"standard"`` (1 credit/page),
-            ``"max"`` (3), ``"infratex-phi"`` (3), or ``"standard-ultra-2"`` (3).
-            Defaults to ``"standard"`` server-side.
+            ``"max"`` (3), ``"infratex-phi"`` (3), ``"infratex-gamma"`` (1),
+            or ``"standard-ultra-2"`` (3). Defaults to ``"standard"``
+            server-side.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -127,8 +128,9 @@ class Documents:
             Ordered local paths to PNG, JPEG, or WebP image files. The order of
             the files is treated as the page order of the document.
         method:
-            Parsing method: ``"standard"``, ``"max"``, ``"infratex-phi"``, or
-            ``"standard-ultra-2"``. Defaults to ``"standard"``.
+            Parsing method: ``"standard"``, ``"max"``, ``"infratex-phi"``,
+            ``"infratex-gamma"``, or ``"standard-ultra-2"``. Defaults to
+            ``"standard"``.
         collection_id:
             Optional collection to assign the document to.
         wait:
