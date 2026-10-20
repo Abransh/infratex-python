@@ -6,16 +6,19 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Sequence, Union, overload
 
-from .._http import InfratexError
-from .._types import DocumentList, Document, Index, UploadedDocument
+from .._http import BinaryResponse, InfratexError
+from .._types import DocumentFigureList, DocumentList, Document, Index, UploadedDocument
 
 if TYPE_CHECKING:
     from .._http import HTTPClient
 
-ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi"]
+ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi", "infratex-gamma"]
 IndexMethod = Literal["vector", "hybrid"]
+TableFormat = Literal["otsl", "html"]
 
 _PARSED_STATES = {"parsed", "indexed", "done"}
+
+DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 class Documents:
@@ -32,6 +35,7 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
@@ -42,6 +46,7 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
@@ -51,19 +56,29 @@ class Documents:
         file_path: str,
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
-        """Upload and parse a PDF document.
+        """Upload and parse a PDF or Word (``.docx``) document.
 
         Parameters
         ----------
         file_path:
-            Local path to the PDF file.
+            Local path to a PDF or ``.docx`` file. A ``.docx`` is read from the
+            file itself and billed at the ``standard`` price whatever ``method``
+            is sent; the document reports ``standard`` as its method.
         method:
             Parsing method. One of ``"standard"`` (1 credit/page),
-            ``"max"`` (3), ``"infratex-phi"`` (3), or ``"standard-ultra-2"`` (3).
-            Defaults to ``"standard"`` server-side.
+            ``"max"`` (3), ``"infratex-phi"`` (3), ``"infratex-gamma"`` (1),
+            or ``"standard-ultra-2"`` (3). Defaults to ``"standard"``
+            server-side.
+        table_format:
+            Table syntax the parser emits: ``"otsl"`` (server default) or
+            ``"html"``. Stored with the document and not changeable later: a
+            document parsed as ``otsl`` can be read back as either syntax, one
+            parsed as ``html`` only as HTML. ``standard`` always returns
+            Markdown pipe tables.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -73,10 +88,12 @@ class Documents:
         """
         filename = os.path.basename(file_path)
         with open(file_path, "rb") as f:
-            files = {"file": (filename, f, "application/pdf")}
+            files = {"file": (filename, f, _guess_document_mime_type(filename))}
             data: Dict[str, Any] = {}
             if method is not None:
                 data["method"] = method
+            if table_format is not None:
+                data["table_format"] = table_format
             if collection_id is not None:
                 data["collection_id"] = collection_id
 
@@ -97,6 +114,7 @@ class Documents:
         file_paths: Sequence[str],
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
@@ -107,6 +125,7 @@ class Documents:
         file_paths: Sequence[str],
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
@@ -116,6 +135,7 @@ class Documents:
         file_paths: Sequence[str],
         *,
         method: Optional[ParseMethod] = None,
+        table_format: Optional[TableFormat] = None,
         collection_id: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
@@ -127,8 +147,11 @@ class Documents:
             Ordered local paths to PNG, JPEG, or WebP image files. The order of
             the files is treated as the page order of the document.
         method:
-            Parsing method: ``"standard"``, ``"max"``, ``"infratex-phi"``, or
-            ``"standard-ultra-2"``. Defaults to ``"standard"``.
+            Parsing method: ``"standard"``, ``"max"``, ``"infratex-phi"``,
+            ``"infratex-gamma"``, or ``"standard-ultra-2"``. Defaults to
+            ``"standard"``.
+        table_format:
+            ``"otsl"`` (server default) or ``"html"``; see :meth:`upload`.
         collection_id:
             Optional collection to assign the document to.
         wait:
@@ -143,6 +166,8 @@ class Documents:
         data: Dict[str, Any] = {}
         if method is not None:
             data["method"] = method
+        if table_format is not None:
+            data["table_format"] = table_format
         if collection_id is not None:
             data["collection_id"] = collection_id
 
@@ -218,9 +243,67 @@ class Documents:
         resp = self._client.request("GET", "/api/v1/documents/{}".format(document_id))
         return Document(resp)
 
-    def markdown(self, document_id: str) -> str:
-        """Download the parsed markdown for a document."""
-        return self._client.request_text("GET", "/api/v1/documents/{}/markdown".format(document_id))
+    def markdown(
+        self,
+        document_id: str,
+        *,
+        table_format: Optional[TableFormat] = None,
+        figure_descriptions: Optional[bool] = None,
+    ) -> str:
+        """Download the parsed markdown for a document.
+
+        Parameters
+        ----------
+        document_id:
+            The parsed document.
+        table_format:
+            ``"otsl"`` returns tables exactly as parsed; ``"html"`` converts
+            every OTSL block to a ``<table>``. Omitted by default, so the server
+            default (``otsl``) applies. Conversion runs one way only: a document
+            parsed with ``table_format="html"`` is always served as HTML.
+        figure_descriptions:
+            Pass ``False`` to leave the generated ``<description>`` out of
+            figure blocks (the server default keeps them). Omitted unless set,
+            so servers that predate the parameter are unaffected.
+        """
+        params: Dict[str, Any] = {
+            "table_format": table_format,
+            "figure_descriptions": _bool_param(figure_descriptions),
+        }
+        return self._client.request_text(
+            "GET",
+            "/api/v1/documents/{}/markdown".format(document_id),
+            params=params,
+        )
+
+    def list_figures(self, document_id: str) -> DocumentFigureList:
+        """List the figures cropped from a parsed PDF.
+
+        Each :class:`~infratex.DocumentFigure` carries its page, type, detection
+        score, bounding box in PDF points and the ``src`` its figure block in
+        the Markdown carries. Empty when the document has no figures or they
+        could not be matched reliably.
+        """
+        resp = self._client.request("GET", "/api/v1/documents/{}/figures".format(document_id))
+        return DocumentFigureList(resp)
+
+    def download_figure(self, document_id: str, name: str) -> BinaryResponse:
+        """Download one cropped figure as PNG bytes.
+
+        ``name`` is a figure's ``name`` (``p12-1.png``); its ``src``
+        (``figures/p12-1.png``) is accepted too. Call ``.save(path)`` on the
+        returned :class:`~infratex.BinaryResponse` to write it to disk.
+        """
+        filename = name.rsplit("/", 1)[-1]
+        resp = self._client.request_bytes(
+            "GET",
+            "/api/v1/documents/{}/figures/{}".format(document_id, filename),
+        )
+        return BinaryResponse(
+            resp.content,
+            filename=resp.filename or filename,
+            content_type=resp.content_type,
+        )
 
     def update(
         self,
@@ -368,6 +451,22 @@ class Documents:
                     code="index_timeout",
                 )
             time.sleep(self._poll_interval_seconds)
+
+
+def _bool_param(value: Optional[bool]) -> Optional[str]:
+    if value is None:
+        return None
+    return "true" if value else "false"
+
+
+def _guess_document_mime_type(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        return "application/pdf"
+    if lower.endswith(".docx"):
+        return DOCX_CONTENT_TYPE
+    # The API identifies the document from its bytes; a neutral type is accepted.
+    return "application/octet-stream"
 
 
 def _guess_image_mime_type(file_path: str) -> str:

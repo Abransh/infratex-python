@@ -1,6 +1,6 @@
 # Infratex Python SDK
 
-Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, and extract structured fields.
+Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs, Word documents, or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, and extract structured fields.
 
 ## Installation
 
@@ -54,13 +54,26 @@ client = Infratex()
 
 | Method | Credits / page | Notes |
 |--------|----------------|-------|
-| `standard` | 1 | Default. Fast, high-quality Markdown. |
-| `max` | 3 | Gemini parser; adds brief `[visual-note: ...]` lines for charts, figures, and photos. |
-| `infratex-phi` | 3 | Self-hosted vision engine. |
-| `standard-ultra-2` | 3 | GPT vision parser (API-only). |
+| `standard` | 1 | Default. Fast, high-quality Markdown for most documents. |
+| `max` | 3 | Figures are marked, captioned, and described. For documents where charts, diagrams, and photos carry meaning. |
+| `infratex-phi` | 3 | Proprietary in-house model. Dense tables, financial statements, faithfulness-first OCR. |
+| `infratex-gamma` | 1 | Layout-aware OCR. Faithful text and tables at volume, with a bounding box for every region. |
+| `standard-ultra-2` | 3 | High-fidelity vision for complex nested tables and chart-heavy reports (API-only). |
 
 Both `documents.upload(...)` and `documents.upload_images(...)` accept any of these
-methods and default to `standard`.
+methods and default to `standard`. A method that is temporarily unavailable is rejected
+at upload with `InfratexError` (status 503, code `method_unavailable`).
+
+`table_format` (`"otsl"` or `"html"`) sets the table syntax the parser emits; it is
+honoured by `max`, `infratex-phi`, `infratex-gamma` and `standard-ultra-2` (`standard`
+returns Markdown pipe tables). It is stored with the document: a document parsed as
+`otsl` can be read back as either syntax with `documents.markdown(id, table_format=...)`,
+one parsed as `html` only as HTML.
+
+`documents.upload(...)` also accepts a Word `.docx`. It is read from the file itself (no
+model call) and billed at the `standard` price whatever `method` you send; the document
+reports `standard` as its method. Legacy `.doc` and macro-enabled `.docm` files are
+rejected with status 415.
 
 ## Resources
 
@@ -70,6 +83,12 @@ methods and default to `standard`.
 # Upload a PDF — waits for parsing and returns the markdown-bearing document.
 doc = client.documents.upload("report.pdf")
 doc = client.documents.upload("report.pdf", method="max", collection_id="col-id")
+
+# Word documents use the same call.
+doc = client.documents.upload("contract.docx")
+
+# Table syntax: "otsl" (default) or "html". Stored with the document, not changeable later.
+doc = client.documents.upload("report.pdf", method="infratex-gamma", table_format="otsl")
 
 # Upload an ordered image batch as document pages (file order = page order).
 images = client.documents.upload_images(["page-1.png", "page-2.png"], method="standard")
@@ -83,6 +102,14 @@ docs = client.documents.list(limit=50, offset=0, collection_id="col-id")
 print(docs.total)
 doc = client.documents.get("doc-id")
 md = client.documents.markdown("doc-id")
+md = client.documents.markdown("doc-id", table_format="html")   # OTSL tables as <table>
+md = client.documents.markdown("doc-id", figure_descriptions=False)   # drop figure <description>s
+
+# Figures cropped from a parsed PDF (any method). The figure block in the markdown
+# carries the same src (figures/p12-1.png); bbox is [x1, y1, x2, y2] in PDF points.
+for figure in client.documents.list_figures("doc-id"):
+    print(figure.page, figure.type, figure.src, figure.bbox)
+    client.documents.download_figure("doc-id", figure.name).save(figure.name)   # PNG
 
 # Rename or move between collections
 client.documents.update("doc-id", filename="q3-report.pdf")
@@ -177,6 +204,10 @@ print(result.evidence)   # per-field evidence (present because include_evidence=
 # Reference a dashboard-managed template instead of inline fields
 run = client.extractions.create("doc-id", template_id="tpl-id")
 
+# Exhaustive mode for list fields where every item matters (footnotes, line items):
+# reads every part of the document for array fields, then checks for missed items.
+run = client.extractions.create("doc-id", template_id="tpl-id", completeness="exhaustive")
+
 # List prior runs, then export tabular results
 runs = client.extractions.list("doc-id")
 export = client.extractions.export(run.id, format="xlsx")   # or "csv"
@@ -186,7 +217,9 @@ export.save("results.xlsx")
 Field definitions support nested shapes: `type` may be `string`, `number`, `integer`,
 `boolean`, `date`, `enum`, `object`, or `array`. Use `enum_values` for `enum`,
 `properties` (a list of fields) for `object`, and `items` (a single field) for `array`.
-Extraction templates are created and managed in the dashboard.
+Extraction templates are created and managed in the dashboard. `completeness` is
+`"standard"` (default) or `"exhaustive"`; exhaustive runs are slower and bill more tokens,
+and the run reports the mode it used in `run.completeness`.
 
 ### Collections
 
@@ -218,7 +251,24 @@ print(settings.allow_overage, settings.monthly_spend_cap_micros)
 
 billing = client.billing.get()
 print(billing.balance_micros)
+
+# The credit ledger, newest first: every charge, refund, grant and top-up with the
+# balance after it. Amounts are in micro-euros (1 credit = 5,000).
+page = client.billing.list_transactions(since="2026-10-01T00:00:00Z", limit=100)  # limit <= 500
+for tx in page:
+    print(tx.created_at, tx.transaction_type, tx.amount_micros, tx.description)
+older = client.billing.list_transactions(before=page.next_before) if page.next_before else None
+
+# Or let the SDK follow next_before for you.
+from datetime import datetime, timezone
+
+for tx in client.billing.iter_transactions(since=datetime(2026, 10, 1, tzinfo=timezone.utc)):
+    print(tx.source_id, tx.amount_micros)
 ```
+
+`since` / `until` / `before` take a timezone-aware `datetime` or an ISO 8601 string. A
+parse charge carries the document id in `source_id` and the file name and billed pages
+in `description` and `metadata`.
 
 ## Error handling
 
@@ -247,6 +297,16 @@ client = Infratex(
 # Use as a context manager
 with Infratex(api_key="infratex_sk_...") as client:
     doc = client.documents.upload("report.pdf")
+```
+
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+pytest          # tests run against a mocked HTTP transport, no API key needed
+mypy            # strict, over infratex/ and tests/
+ruff check .
 ```
 
 ## License

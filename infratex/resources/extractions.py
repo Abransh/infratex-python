@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 ExtractionModel = Literal["fast", "pro"]
 ExportFormat = Literal["csv", "xlsx"]
+Completeness = Literal["standard", "exhaustive"]
 
 _TERMINAL_STATES = {"done", "error"}
 
@@ -42,6 +43,7 @@ class Extractions:
         inline_system_prompt: Optional[str] = None,
         model: ExtractionModel = "fast",
         include_evidence: bool = False,
+        completeness: Optional[Completeness] = None,
     ) -> ExtractionRun:
         """Queue an extraction run against a parsed document.
 
@@ -66,6 +68,11 @@ class Extractions:
             ``"fast"`` (default) or ``"pro"``.
         include_evidence:
             When ``True``, evidence payloads are computed and returned on the run.
+        completeness:
+            ``"standard"`` (server default) or ``"exhaustive"``. Exhaustive reads
+            every part of the document for array fields, merges and
+            de-duplicates the items, then checks for missed ones. Slower, and
+            bills more tokens; scalar fields are unaffected. Sent only when set.
         """
         has_inline = inline_fields is not None
         has_template = template_id is not None
@@ -84,6 +91,8 @@ class Extractions:
             body["template_id"] = template_id
         if inline_system_prompt is not None:
             body["inline_system_prompt"] = inline_system_prompt
+        if completeness is not None:
+            body["completeness"] = completeness
 
         resp = self._client.request(
             "POST",
