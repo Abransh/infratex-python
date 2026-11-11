@@ -2,12 +2,33 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Sequence, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+    overload,
+)
 
 from .._http import BinaryResponse, InfratexError
-from .._types import DocumentFigureList, DocumentList, Document, Index, UploadedDocument
+from .._types import (
+    DocumentFigureList,
+    DocumentLayout,
+    DocumentList,
+    Document,
+    DocumentProgress,
+    Index,
+    UploadedDocument,
+)
 
 if TYPE_CHECKING:
     from .._http import HTTPClient
@@ -15,6 +36,17 @@ if TYPE_CHECKING:
 ParseMethod = Literal["standard", "max", "standard-ultra-2", "infratex-phi", "infratex-gamma"]
 IndexMethod = Literal["vector", "hybrid"]
 TableFormat = Literal["otsl", "html"]
+#: ``infratex-gamma`` parse options, e.g. ``{"merge_tables": False,
+#: "ignore_labels": ["header", "footer"]}``. Keys and defaults are listed in the
+#: API docs (Parsing, "Parse options"); an unknown key or bad value is a 422
+#: ``invalid_parse_options``, and any other method answers 422
+#: ``invalid_parse_configuration``.
+ParseOptions = Mapping[str, Any]
+
+IDEMPOTENCY_HEADER = "Idempotency-Key"
+
+#: Called by :meth:`Documents.wait_until_parsed` with each new progress.
+ProgressCallback = Callable[[DocumentProgress], None]
 
 _PARSED_STATES = {"parsed", "indexed", "done"}
 
@@ -36,7 +68,9 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         table_format: Optional[TableFormat] = None,
+        options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
 
@@ -47,7 +81,9 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         table_format: Optional[TableFormat] = None,
+        options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
 
@@ -57,7 +93,9 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         table_format: Optional[TableFormat] = None,
+        options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
         """Upload and parse a PDF or Word (``.docx``) document.
@@ -79,8 +117,15 @@ class Documents:
             document parsed as ``otsl`` can be read back as either syntax, one
             parsed as ``html`` only as HTML. ``standard`` always returns
             Markdown pipe tables.
+        options:
+            ``infratex-gamma`` only: parse options sent as one JSON object
+            (see :data:`ParseOptions`). Sent only when set.
         collection_id:
             Optional collection to assign the document to.
+        idempotency_key:
+            Sent as the ``Idempotency-Key`` header. Reuse the same key when
+            retrying the same upload: within 24 hours the API returns the first
+            response instead of creating (and billing) a second document.
         wait:
             When ``True`` (default), poll until parsing is complete and return
             the final markdown-bearing document payload. When ``False``,
@@ -94,6 +139,8 @@ class Documents:
                 data["method"] = method
             if table_format is not None:
                 data["table_format"] = table_format
+            if options is not None:
+                data["options"] = json.dumps(dict(options))
             if collection_id is not None:
                 data["collection_id"] = collection_id
 
@@ -102,6 +149,7 @@ class Documents:
                 "/api/v1/documents",
                 data=data,
                 files=files,
+                headers={IDEMPOTENCY_HEADER: idempotency_key},
             )
         created = Document(resp)
         if not wait:
@@ -115,7 +163,9 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         table_format: Optional[TableFormat] = None,
+        options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait: Literal[True] = True,
     ) -> UploadedDocument: ...
 
@@ -126,7 +176,9 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         table_format: Optional[TableFormat] = None,
+        options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait: Literal[False],
     ) -> Document: ...
 
@@ -136,7 +188,9 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         table_format: Optional[TableFormat] = None,
+        options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait: bool = True,
     ) -> Union[Document, UploadedDocument]:
         """Upload and parse an ordered batch of page images.
@@ -152,8 +206,12 @@ class Documents:
             ``"standard"``.
         table_format:
             ``"otsl"`` (server default) or ``"html"``; see :meth:`upload`.
+        options:
+            ``infratex-gamma`` only: parse options; see :meth:`upload`.
         collection_id:
             Optional collection to assign the document to.
+        idempotency_key:
+            Sent as the ``Idempotency-Key`` header; see :meth:`upload`.
         wait:
             When ``True`` (default), poll until parsing is complete and return
             the final markdown-bearing document payload. When ``False``,
@@ -168,6 +226,8 @@ class Documents:
             data["method"] = method
         if table_format is not None:
             data["table_format"] = table_format
+        if options is not None:
+            data["options"] = json.dumps(dict(options))
         if collection_id is not None:
             data["collection_id"] = collection_id
 
@@ -186,6 +246,7 @@ class Documents:
                 "/api/v1/documents/images",
                 data=data,
                 files=files,
+                headers={IDEMPOTENCY_HEADER: idempotency_key},
             )
         finally:
             for handle in handles:
@@ -276,6 +337,16 @@ class Documents:
             params=params,
         )
 
+    def layout(self, document_id: str) -> DocumentLayout:
+        """Bounding boxes of a document parsed with ``infratex-gamma``.
+
+        Each page lists its regions (label, ``bbox`` in pixels of a page image
+        of the page's ``width`` x ``height``, recognised text). Other methods
+        answer 404 ``layout_not_available``; 409 while parsing.
+        """
+        resp = self._client.request("GET", "/api/v1/documents/{}/layout".format(document_id))
+        return DocumentLayout(resp)
+
     def list_figures(self, document_id: str) -> DocumentFigureList:
         """List the figures cropped from a parsed PDF.
 
@@ -340,15 +411,44 @@ class Documents:
         )
         return Document(resp)
 
-    def wait_until_parsed(self, document_id: str) -> UploadedDocument:
-        """Block until the document finishes parsing and return its markdown payload."""
-        return self._wait_for_uploaded_document(document_id)
+    def wait_until_parsed(
+        self,
+        document_id: str,
+        *,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> UploadedDocument:
+        """Block until the document finishes parsing and return its markdown payload.
 
-    def _wait_for_uploaded_document(self, document_id: str) -> UploadedDocument:
+        ``on_progress`` is called with the document's
+        :class:`~infratex.DocumentProgress` each time it differs from the last
+        one seen: a new stage, page count or attempt, or a fresh
+        ``updated_at`` from the worker's keepalive. It is not called while the
+        API reports no progress.
+
+        Raises :class:`~infratex.InfratexError` with the document's
+        ``error_message`` (code ``document_processing_failed``) when the parse
+        fails, and code ``upload_timeout`` when the client ``timeout`` runs out
+        first; both carry the document id, and the timeout the last progress,
+        in ``details``.
+        """
+        return self._wait_for_uploaded_document(document_id, on_progress=on_progress)
+
+    def _wait_for_uploaded_document(
+        self,
+        document_id: str,
+        *,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> UploadedDocument:
         deadline = time.monotonic() + self._client.timeout_seconds
+        last_progress: Optional[Dict[str, Any]] = None
 
         while True:
             document = self.get(document_id, wait=False)
+            progress = document.progress
+            if progress is not None and progress.to_dict() != last_progress:
+                last_progress = progress.to_dict()
+                if on_progress is not None:
+                    on_progress(progress)
             if document.status in _PARSED_STATES:
                 return UploadedDocument(
                     {
@@ -368,12 +468,14 @@ class Documents:
                     document.error_message or "Document processing failed",
                     status_code=409,
                     code="document_processing_failed",
+                    details={"document_id": document_id},
                 )
             if time.monotonic() >= deadline:
                 raise InfratexError(
                     "Document processing timed out",
                     status_code=504,
                     code="upload_timeout",
+                    details={"document_id": document_id, "progress": last_progress},
                 )
             time.sleep(self._poll_interval_seconds)
 
@@ -387,6 +489,7 @@ class Documents:
         *,
         method: IndexMethod = "vector",
         wait: bool = True,
+        idempotency_key: Optional[str] = None,
     ) -> Index:
         """Create a search index for a document.
 
@@ -398,11 +501,15 @@ class Documents:
             Indexing strategy: ``"vector"`` or ``"hybrid"``.
         wait:
             When ``True`` (default), poll until the index reaches ``indexed``.
+        idempotency_key:
+            Sent as the ``Idempotency-Key`` header; reuse it when retrying the
+            same request so the index is built (and billed) once.
         """
         resp = self._client.request(
             "POST",
             "/api/v1/documents/{}/indexes".format(document_id),
             json_body={"method": method},
+            headers={IDEMPOTENCY_HEADER: idempotency_key},
         )
         created = Index(resp)
         if not wait:

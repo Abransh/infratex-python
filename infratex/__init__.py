@@ -1,7 +1,14 @@
 """Infratex Python SDK."""
 
 from ._client import Infratex
-from ._http import InfratexError, BinaryResponse
+from ._http import (
+    BinaryResponse,
+    EncryptedPDFError,
+    InfratexError,
+    InvalidPipelineError,
+    PipelineNotAvailableError,
+)
+from ._signing import EVENT_ID_HEADER, SIGNATURE_HEADER, verify_webhook_signature
 from ._version import __version__
 from ._types import (
     Account,
@@ -16,7 +23,13 @@ from ._types import (
     DocumentFigure,
     DocumentFigureList,
     DocumentIndex,
+    DocumentLayout,
+    DocumentLayoutPage,
     DocumentList,
+    DocumentProgress,
+    DocumentRegion,
+    ExtractionPipelineInfo,
+    ExtractionPipelines,
     ExtractionRun,
     ExtractionRunList,
     Index,
@@ -25,12 +38,22 @@ from ._types import (
     StreamEvent,
     Tenant,
     UploadedDocument,
+    Webhook,
+    WebhookDelivery,
+    WebhookDeliveryList,
+    WebhookSecret,
 )
 
 __all__ = [
     "Infratex",
     "InfratexError",
+    "InvalidPipelineError",
+    "PipelineNotAvailableError",
+    "EncryptedPDFError",
     "BinaryResponse",
+    "verify_webhook_signature",
+    "SIGNATURE_HEADER",
+    "EVENT_ID_HEADER",
     "Account",
     "AccountSettings",
     "BillingSummary",
@@ -43,7 +66,13 @@ __all__ = [
     "DocumentFigure",
     "DocumentFigureList",
     "DocumentIndex",
+    "DocumentLayout",
+    "DocumentLayoutPage",
     "DocumentList",
+    "DocumentProgress",
+    "DocumentRegion",
+    "ExtractionPipelineInfo",
+    "ExtractionPipelines",
     "ExtractionRun",
     "ExtractionRunList",
     "Index",
@@ -52,5 +81,9 @@ __all__ = [
     "StreamEvent",
     "Tenant",
     "UploadedDocument",
+    "Webhook",
+    "WebhookDelivery",
+    "WebhookDeliveryList",
+    "WebhookSecret",
     "__version__",
 ]

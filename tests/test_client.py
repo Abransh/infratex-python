@@ -21,3 +21,14 @@ def test_documents_get_hits_the_document_route(make_client: ClientFactory) -> No
     assert document.status == "parsed"
     assert recorder.last.method == "GET"
     assert recorder.last.url.path == "/api/v1/documents/doc-1"
+
+
+def test_a_caller_supplied_httpx_client_is_authenticated(make_client: ClientFactory) -> None:
+    client, recorder = make_client(
+        lambda request: httpx.Response(200, json={"tenant": {"id": "t-1"}})
+    )
+
+    client.account.get()
+
+    assert recorder.last.headers["authorization"] == "Bearer infratex_sk_test"
+    assert recorder.last.headers["user-agent"].startswith("infratex-python/")

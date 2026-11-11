@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional, Type
 
 import httpx
 
 from ._version import __version__
 
-__all__ = ["HTTPClient", "InfratexError", "BinaryResponse"]
+__all__ = [
+    "HTTPClient",
+    "InfratexError",
+    "InvalidPipelineError",
+    "PipelineNotAvailableError",
+    "EncryptedPDFError",
+    "BinaryResponse",
+]
 
 _DEFAULT_BASE_URL = "https://api.infratex.io"
 _DEFAULT_TIMEOUT = 300.0  # seconds
@@ -47,7 +54,13 @@ class BinaryResponse:
 
 
 class InfratexError(Exception):
-    """Raised when the Infratex API returns an error response."""
+    """Raised when the Infratex API returns an error response.
+
+    ``code`` is the API's machine-readable error code (``invalid_pdf``,
+    ``idempotency_key_reused``, ...). ``request_id`` identifies the request in
+    support conversations. ``retry_after`` is the ``Retry-After`` header in
+    seconds, set on 429 and on 409 ``idempotency_request_in_progress``.
+    """
 
     def __init__(
         self,
@@ -56,16 +69,59 @@ class InfratexError(Exception):
         status_code: int = 0,
         code: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+        retry_after: Optional[float] = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.details = details
+        self.request_id = request_id
+        self.retry_after = retry_after
 
     def __repr__(self) -> str:
-        return "InfratexError(status_code={!r}, code={!r}, message={!r})".format(
-            self.status_code, self.code, str(self)
+        return "{}(status_code={!r}, code={!r}, message={!r})".format(
+            type(self).__name__, self.status_code, self.code, str(self)
         )
+
+
+class InvalidPipelineError(InfratexError):
+    """422 ``invalid_pipeline``: an extraction run's ``pipeline`` is not
+    ``"legacy"`` or ``"v2"``. Nothing was created or billed."""
+
+    @property
+    def allowed_pipelines(self) -> List[str]:
+        return list((self.details or {}).get("allowed_pipelines") or [])
+
+
+class PipelineNotAvailableError(InfratexError):
+    """422 ``pipeline_not_available``: the run asks for ``pipeline="v2"`` (beta),
+    which is not open for this account yet. Omit ``pipeline`` or send
+    ``"legacy"``; :meth:`~infratex.resources.extractions.Extractions.list_pipelines`
+    shows what the account can choose. Nothing was created or billed."""
+
+    @property
+    def requested_pipeline(self) -> Optional[str]:
+        value = (self.details or {}).get("requested_pipeline")
+        return value if isinstance(value, str) else None
+
+    @property
+    def available_pipelines(self) -> List[str]:
+        return list((self.details or {}).get("available_pipelines") or [])
+
+
+class EncryptedPDFError(InfratexError):
+    """400 ``encrypted_pdf``: the uploaded PDF needs a password to open, so its
+    pages cannot be read. Remove the password and upload it again. Refused
+    before any credits are held. A PDF with only an owner password is
+    accepted."""
+
+
+_ERRORS_BY_CODE: Dict[str, Type[InfratexError]] = {
+    "invalid_pipeline": InvalidPipelineError,
+    "pipeline_not_available": PipelineNotAvailableError,
+    "encrypted_pdf": EncryptedPDFError,
+}
 
 
 class HTTPClient:
@@ -82,6 +138,12 @@ class HTTPClient:
         self._api_key = api_key
         self._base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
         self.timeout_seconds = timeout or _DEFAULT_TIMEOUT
+        # Sent on every request, so a caller-supplied httpx_client is
+        # authenticated too.
+        self._headers = {
+            "Authorization": "Bearer {}".format(api_key),
+            "User-Agent": f"infratex-python/{__version__}",
+        }
 
         if httpx_client is not None:
             self._client = httpx_client
@@ -89,10 +151,7 @@ class HTTPClient:
             self._client = httpx.Client(
                 base_url=self._base_url,
                 timeout=self.timeout_seconds,
-                headers={
-                    "Authorization": "Bearer {}".format(api_key),
-                    "User-Agent": f"infratex-python/{__version__}",
-                },
+                headers=self._headers,
             )
 
     # --------------------------------------------------------------------- #
@@ -108,8 +167,12 @@ class HTTPClient:
         data: Optional[Dict[str, Any]] = None,
         files: Optional[Any] = None,
         params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, Optional[str]]] = None,
     ) -> Any:
-        """Send an HTTP request and return the parsed JSON body."""
+        """Send an HTTP request and return the parsed JSON body.
+
+        ``headers`` are added to the request; ``None`` values are left out.
+        """
         # Strip None values from params
         if params:
             params = {k: v for k, v in params.items() if v is not None}
@@ -121,6 +184,7 @@ class HTTPClient:
             data=data,
             files=files,
             params=params or None,
+            headers=self._request_headers(headers),
         )
         return self._handle_response(response)
 
@@ -135,7 +199,9 @@ class HTTPClient:
         if params:
             params = {k: v for k, v in params.items() if v is not None}
 
-        response = self._client.request(method, path, params=params or None)
+        response = self._client.request(
+            method, path, params=params or None, headers=self._request_headers()
+        )
 
         if response.status_code >= 400:
             self._raise_for_status(response)
@@ -148,7 +214,7 @@ class HTTPClient:
         path: str,
     ) -> None:
         """Send an HTTP request that returns 204 No Content."""
-        response = self._client.request(method, path)
+        response = self._client.request(method, path, headers=self._request_headers())
         if response.status_code >= 400:
             self._raise_for_status(response)
 
@@ -163,7 +229,9 @@ class HTTPClient:
         if params:
             params = {k: v for k, v in params.items() if v is not None}
 
-        response = self._client.request(method, path, params=params or None)
+        response = self._client.request(
+            method, path, params=params or None, headers=self._request_headers()
+        )
         if response.status_code >= 400:
             self._raise_for_status(response)
 
@@ -187,7 +255,9 @@ class HTTPClient:
         json_body: Optional[Dict[str, Any]] = None,
     ) -> Iterator[Dict[str, Any]]:
         """Send an HTTP request and iterate over SSE ``data:`` lines."""
-        with self._client.stream(method, path, json=json_body) as response:
+        with self._client.stream(
+            method, path, json=json_body, headers=self._request_headers()
+        ) as response:
             if response.status_code >= 400:
                 # Read the full body for the error message
                 response.read()
@@ -209,6 +279,15 @@ class HTTPClient:
     # Internal
     # --------------------------------------------------------------------- #
 
+    def _request_headers(
+        self, extra: Optional[Dict[str, Optional[str]]] = None
+    ) -> Dict[str, str]:
+        headers = dict(self._headers)
+        for name, value in (extra or {}).items():
+            if value is not None:
+                headers[name] = value
+        return headers
+
     @staticmethod
     def _handle_response(response: httpx.Response) -> Any:
         if response.status_code >= 400:
@@ -222,24 +301,69 @@ class HTTPClient:
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
-        status_code = response.status_code
-        code = None
-        message = "API request failed"
-        details = None
+        raise error_from_response(response)
 
-        try:
-            body = response.json()
-            if isinstance(body, dict):
-                # The API may return {"detail": "..."} or {"code": "...", "message": "..."}
-                message = body.get("message") or body.get("detail") or message
-                code = body.get("code")
-                details = body.get("details")
-        except Exception:
-            message = response.text or message
 
-        raise InfratexError(
-            message,
-            status_code=status_code,
-            code=code,
-            details=details,
-        )
+def error_from_response(response: httpx.Response) -> InfratexError:
+    """The :class:`InfratexError` (or typed subclass) for an error response.
+
+    The API answers ``{"error": {"code", "message", "details", "request_id"}}``;
+    the older top-level ``{"code", "message", "details"}`` and FastAPI's
+    ``{"detail": ...}`` shapes are read too.
+    """
+    message = "API request failed"
+    code: Optional[str] = None
+    details: Any = None
+    request_id: Optional[str] = response.headers.get("x-request-id")
+
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+        message = response.text or message
+
+    if isinstance(body, dict):
+        payload: Dict[str, Any] = body
+        if isinstance(body.get("error"), dict):
+            payload = body["error"]
+        elif isinstance(body.get("detail"), dict):
+            payload = body["detail"]
+        elif isinstance(body.get("detail"), str):
+            payload = {"message": body["detail"]}
+        message = _as_str(payload.get("message")) or message
+        code = _as_str(payload.get("code"))
+        details = payload.get("details")
+        request_id = _as_str(payload.get("request_id")) or request_id
+
+    error_class = _ERRORS_BY_CODE.get(code or "", InfratexError)
+    return error_class(
+        message,
+        status_code=response.status_code,
+        code=code,
+        details=_as_details(details),
+        request_id=request_id,
+        retry_after=_retry_after(response),
+    )
+
+
+def _as_str(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
+def _as_details(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    # A request validation error lists its field errors.
+    return {"errors": value}
+
+
+def _retry_after(response: httpx.Response) -> Optional[float]:
+    value = response.headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None

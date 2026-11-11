@@ -55,6 +55,29 @@ class DocumentIndex(_Base):
         super().__init__(_coerce_index_payload(data))
 
 
+class DocumentProgress(_Base):
+    """Where a pending or processing document's parse is.
+
+    ``stage`` is ``"queued"`` (waiting for a worker, also after a stopped run
+    went back to the queue), ``"parsing"`` (pages being read) or
+    ``"finishing"`` (every page through; the result is being stored).
+    ``pages_done`` counts finished pages out of ``pages_total``, including
+    pages kept from a stopped run and pages that failed. ``attempt`` is ``0``
+    while waiting for the first run and goes up when a stopped run went back
+    to the queue; the document fails after ``max_attempts``. ``updated_at`` is
+    when it entered the queue (``queued``) or the worker's last report, at
+    least every 30 seconds (``parsing`` / ``finishing``): several minutes old
+    means the run has stopped.
+    """
+
+    stage: str
+    pages_done: int
+    pages_total: Optional[int]
+    attempt: int
+    max_attempts: int
+    updated_at: str
+
+
 class Document(_Base):
     id: str
     filename: str
@@ -71,10 +94,15 @@ class Document(_Base):
     upload_time: Optional[str]
     extraction_pages: Optional[List[Dict[str, Any]]]
     indexes: Optional[List[DocumentIndex]]
+    #: Set while the document is ``pending`` or ``processing``; ``None`` once it
+    #: is parsed or failed (and for a moment while processing starts).
+    progress: Optional[DocumentProgress]
 
     def __init__(self, data: Dict[str, Any]) -> None:
         super().__init__(data)
         self.indexes = [DocumentIndex(_coerce_index_payload(item)) for item in data.get("indexes", [])]
+        raw_progress = data.get("progress")
+        self.progress = DocumentProgress(raw_progress) if isinstance(raw_progress, dict) else None
 
 
 class UploadedDocument(_Base):
@@ -134,6 +162,46 @@ class DocumentFigureList(_Base):
 
     def __len__(self) -> int:
         return len(self.figures)
+
+
+class DocumentRegion(_Base):
+    """One layout region of a page: ``bbox`` is ``[x1, y1, x2, y2]`` in pixels
+    of a page image of the page's ``width`` x ``height``; ``content`` is the
+    region's recognised text (tables as HTML)."""
+
+    id: int
+    label: str
+    bbox: List[float]
+    content: str
+    page: int
+
+
+class DocumentLayoutPage(_Base):
+    page: int
+    width: float
+    height: float
+    regions: List[DocumentRegion]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.regions = [DocumentRegion(r) for r in data.get("regions", [])]
+
+
+class DocumentLayout(_Base):
+    """Per-page layout regions of a document parsed with ``infratex-gamma``."""
+
+    document_id: str
+    pages: List[DocumentLayoutPage]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.pages = [DocumentLayoutPage(p) for p in data.get("pages", [])]
+
+    def __iter__(self):  # type: ignore
+        return iter(self.pages)
+
+    def __len__(self) -> int:
+        return len(self.pages)
 
 
 # ---------------------------------------------------------------------------
@@ -269,9 +337,53 @@ class ExtractionRun(_Base):
     processing_time_ms: Optional[int]
     input_tokens: Optional[int]
     output_tokens: Optional[int]
+    #: Credits the run charged (1 credit = EUR 0.005): ``0`` for a cached or
+    #: failed run, ``None`` while it runs.
+    credits_charged: Optional[float]
+    #: Extraction engine build that computed the result.
+    engine_version: Optional[str]
+    #: The pipeline that ran (``"legacy"`` or ``"v2"``); ``None`` until the run
+    #: finishes.
+    pipeline: Optional[str]
+    #: ``True`` when an identical earlier run's result was reused at no charge.
+    cached: bool
     error_message: Optional[str]
     created_at: str
     updated_at: str
+
+
+class ExtractionPipelineInfo(_Base):
+    """One extraction pipeline. ``available`` says whether this account may
+    choose it per run with ``pipeline``."""
+
+    id: str
+    label: str
+    stage: str
+    available: bool
+
+
+class ExtractionPipelines(_Base):
+    """The extraction pipelines (``GET /api/v1/extraction-pipelines``).
+
+    ``default`` is what a run without ``pipeline`` executes.
+    """
+
+    default: str
+    pipelines: List[ExtractionPipelineInfo]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.pipelines = [ExtractionPipelineInfo(p) for p in data.get("pipelines", [])]
+
+    def is_available(self, pipeline: str) -> bool:
+        """Whether this account may choose ``pipeline`` (``"legacy"`` or ``"v2"``)."""
+        return any(p.id == pipeline and p.available for p in self.pipelines)
+
+    def __iter__(self):  # type: ignore
+        return iter(self.pipelines)
+
+    def __len__(self) -> int:
+        return len(self.pipelines)
 
 
 class ExtractionRunList(_Base):
@@ -297,6 +409,8 @@ class AccountSettings(_Base):
     monthly_spend_cap_micros: Optional[int]
     low_balance_threshold_micros: int
     has_payment_method: bool
+    #: ``"default"`` or ``"eu_only"``: where the account's requests may be processed.
+    data_residency: str
 
 
 class Tenant(_Base):
@@ -370,3 +484,65 @@ class BillingSummary(_Base):
     spend_by_service: List[Dict[str, Any]]
     daily_spend: List[Dict[str, Any]]
     totals: Dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Webhooks
+# ---------------------------------------------------------------------------
+class Webhook(_Base):
+    """A registered webhook endpoint.
+
+    ``events`` is empty when the endpoint takes every event type. ``secret``
+    is present only on the object returned by ``webhooks.create(...)``.
+    """
+
+    id: str
+    url: str
+    description: Optional[str]
+    events: List[str]
+    enabled: bool
+    created_at: str
+    updated_at: str
+    secret: Optional[str]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.secret = data.get("secret")
+
+
+class WebhookSecret(_Base):
+    """A new signing secret (``whsec_...``) returned by ``webhooks.rotate_secret(...)``."""
+
+    secret: str
+
+
+class WebhookDelivery(_Base):
+    """One delivery of an event to an endpoint, with its retry state."""
+
+    id: str
+    event_id: str
+    event_type: str
+    status: str
+    attempts: int
+    last_status_code: Optional[int]
+    last_error: Optional[str]
+    created_at: str
+    last_attempt_at: Optional[str]
+    delivered_at: Optional[str]
+    next_attempt_at: Optional[str]
+
+
+class WebhookDeliveryList(_Base):
+    """An endpoint's deliveries, newest first (kept 30 days)."""
+
+    items: List[WebhookDelivery]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.items = [WebhookDelivery(d) for d in data.get("items", [])]
+
+    def __iter__(self):  # type: ignore
+        return iter(self.items)
+
+    def __len__(self) -> int:
+        return len(self.items)
