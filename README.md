@@ -1,6 +1,14 @@
 # Infratex Python SDK
 
-Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs, Word documents, or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, and extract structured fields.
+Official Python client for the [Infratex](https://infratex.io) document intelligence API. Parse PDFs, Word documents, or ordered image batches, build search indexes, retrieve cited context, stream grounded answers, extract structured fields, and receive webhooks when work finishes.
+
+## API parity
+
+Every public endpoint and request parameter in the [API docs](https://docs.infratex.io) is
+available from this SDK, and every API error code reaches you in `InfratexError.code`. Each
+release lists the API changes it covers in [CHANGELOG.md](CHANGELOG.md), next to the API docs
+section each change matches, along with anything not covered yet. The Node.js SDK
+(`npm install infratex`) ships the same changes under the same version number.
 
 ## Installation
 
@@ -64,6 +72,11 @@ Both `documents.upload(...)` and `documents.upload_images(...)` accept any of th
 methods and default to `standard`. A method that is temporarily unavailable is rejected
 at upload with `InfratexError` (status 503, code `method_unavailable`).
 
+`infratex-gamma` also takes parse `options`, sent as one JSON object, for example
+`options={"merge_tables": False, "ignore_labels": ["header", "footer"]}`. The keys and their
+defaults are listed in the API docs (Parsing, "Parse options"); other methods answer 422
+`invalid_parse_configuration`.
+
 `table_format` (`"otsl"` or `"html"`) sets the table syntax the parser emits; it is
 honoured by `max`, `infratex-phi`, `infratex-gamma` and `standard-ultra-2` (`standard`
 returns Markdown pipe tables). It is stored with the document: a document parsed as
@@ -89,6 +102,12 @@ doc = client.documents.upload("contract.docx")
 
 # Table syntax: "otsl" (default) or "html". Stored with the document, not changeable later.
 doc = client.documents.upload("report.pdf", method="infratex-gamma", table_format="otsl")
+
+# infratex-gamma parse options, and its per-region bounding boxes once parsed.
+doc = client.documents.upload("scan.pdf", method="infratex-gamma", options={"unwarp": True})
+for page in client.documents.layout(doc.id):
+    for region in page.regions:
+        print(page.page, region.label, region.bbox)   # bbox in pixels of a page.width x page.height image
 
 # Upload an ordered image batch as document pages (file order = page order).
 images = client.documents.upload_images(["page-1.png", "page-2.png"], method="standard")
@@ -204,9 +223,39 @@ print(result.evidence)   # per-field evidence (present because include_evidence=
 # Reference a dashboard-managed template instead of inline fields
 run = client.extractions.create("doc-id", template_id="tpl-id")
 
+# Run every step on Infratex's self-hosted model
+run = client.extractions.create("doc-id", template_id="tpl-id", model="infratex-phi")
+
 # Exhaustive mode for list fields where every item matters (footnotes, line items):
 # reads every part of the document for array fields, then checks for missed items.
 run = client.extractions.create("doc-id", template_id="tpl-id", completeness="exhaustive")
+
+# v2 (beta): "legacy" (default) or "v2". v2 opens per account; check before asking for it.
+from infratex import InvalidPipelineError, PipelineNotAvailableError
+
+if client.extractions.list_pipelines().is_available("v2"):
+    run = client.extractions.create("doc-id", template_id="tpl-id", pipeline="v2")
+try:
+    run = client.extractions.create("doc-id", template_id="tpl-id", pipeline="v2")
+except PipelineNotAvailableError as e:
+    print(e.available_pipelines)   # ["legacy"]: the beta is not open for this account yet
+done = client.extractions.wait_until_done(run.id)
+print(done.pipeline, done.credits_charged, done.cached)   # the engine that ran, its cost
+
+# Parse and extract in one call (POST /api/v1/extractions): a PDF, .docx or one image.
+# wait (0-300 s) holds the request server-side until the run is done or failed.
+run = client.extractions.create_from_file(
+    "contract.pdf",
+    method="standard",
+    model="pro",
+    inline_fields=[{"name": "counterparty", "type": "string", "description": "Legal name"}],
+    wait=180,
+)
+if run.status not in ("done", "error"):
+    run = client.extractions.wait_until_done(run.id)
+
+# Poll with a server-side hold instead of client-side polling
+run = client.extractions.get(run.id, wait=60)
 
 # List prior runs, then export tabular results
 runs = client.extractions.list("doc-id")
@@ -220,6 +269,13 @@ Field definitions support nested shapes: `type` may be `string`, `number`, `inte
 Extraction templates are created and managed in the dashboard. `completeness` is
 `"standard"` (default) or `"exhaustive"`; exhaustive runs are slower and bill more tokens,
 and the run reports the mode it used in `run.completeness`.
+
+`pipeline` is sent in the request body only when you set it (never as a query parameter).
+`"v2"` before the beta is open for your account raises `PipelineNotAvailableError`
+(422 `pipeline_not_available`); any other value raises `InvalidPipelineError`
+(422 `invalid_pipeline`). Nothing is created or billed when a run is refused. Every finished
+run reports the engine that ran in `run.pipeline`, what it charged in `run.credits_charged`,
+and whether an earlier identical result was reused at no charge in `run.cached`.
 
 ### Collections
 
@@ -247,7 +303,11 @@ account = client.account.get()
 print(account.tenant["email"], account.tenant["credit_balance_micros"])
 
 settings = client.account.settings()
-print(settings.allow_overage, settings.monthly_spend_cap_micros)
+print(settings.allow_overage, settings.monthly_spend_cap_micros, settings.data_residency)
+
+# Restrict processing to the EU. An API key can turn eu_only on; only the dashboard
+# can switch it back to "default" (403 dashboard_only).
+client.account.update_settings(data_residency="eu_only")
 
 billing = client.billing.get()
 print(billing.balance_micros)
@@ -270,6 +330,45 @@ for tx in client.billing.iter_transactions(since=datetime(2026, 10, 1, tzinfo=ti
 parse charge carries the document id in `source_id` and the file name and billed pages
 in `description` and `metadata`.
 
+### Webhooks
+
+Register an HTTPS endpoint and Infratex POSTs a signed JSON event when a parse, an index
+build or an extraction run finishes or fails, instead of you polling.
+
+```python
+hook = client.webhooks.create(
+    url="https://example.com/infratex",
+    events=["document.parsed", "extraction.completed"],   # empty or omitted: every type
+    description="production",
+)
+secret = hook.secret   # shown only here and on rotate_secret(): store it
+
+client.webhooks.list()
+client.webhooks.get(hook.id)
+client.webhooks.update(hook.id, enabled=False)          # or url=, events=, description=
+client.webhooks.test(hook.id)                           # queues a webhook.test event
+for delivery in client.webhooks.list_deliveries(hook.id, status="failed", limit=20):
+    client.webhooks.retry_delivery(hook.id, delivery.id)
+new_secret = client.webhooks.rotate_secret(hook.id).secret
+client.webhooks.delete(hook.id)
+```
+
+Verify each delivery over the raw request body before trusting it, and deduplicate on the
+`Infratex-Event-Id` header (the same on every retry):
+
+```python
+from infratex import verify_webhook_signature
+
+# Flask
+@app.post("/infratex")
+def infratex_webhook():
+    if not verify_webhook_signature(SECRET, request.get_data(), request.headers["Infratex-Signature"]):
+        abort(400)
+    event = request.get_json()
+    ...
+    return "", 200
+```
+
 ## Error handling
 
 ```python
@@ -281,8 +380,39 @@ try:
     doc = client.documents.get("nonexistent-id")
 except InfratexError as e:
     print(e.status_code)  # 404
-    print(e.code)         # error code from the API
+    print(e.code)         # error code from the API, e.g. "not_found"
     print(str(e))         # human-readable message
+    print(e.details)      # extra fields the API sent, if any
+    print(e.request_id)   # quote it when you contact support
+    print(e.retry_after)  # Retry-After in seconds (429, 409 idempotency_request_in_progress)
+```
+
+`InvalidPipelineError` and `PipelineNotAvailableError` are subclasses of `InfratexError`
+for the two extraction `pipeline` refusals; every other API error code is in `e.code`.
+
+### Retries and idempotency
+
+A request that times out may still have been accepted. To retry a create safely, pass the
+same `idempotency_key` on every attempt: within 24 hours the API returns the first response
+instead of creating (and billing) the work twice. It is accepted on
+`documents.upload(...)`, `documents.upload_images(...)`, `documents.index(...)`,
+`extractions.create(...)` and `extractions.create_from_file(...)`.
+
+```python
+import time, uuid
+import httpx
+
+key = str(uuid.uuid4())   # one key per document, reused on every retry
+for attempt in range(5):
+    try:
+        doc = client.documents.upload("contract.pdf", idempotency_key=key, wait=False)
+        break
+    except InfratexError as e:
+        if e.status_code not in (409, 429, 500, 502, 503, 504):
+            raise
+        time.sleep(e.retry_after or 2 ** attempt)
+    except httpx.TransportError:
+        time.sleep(2 ** attempt)
 ```
 
 ## Configuration
