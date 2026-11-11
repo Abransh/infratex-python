@@ -6,6 +6,7 @@ from .collections import Collections
 from .conversations import Conversations
 from .account import AccountResource
 from .billing import Billing
+from .webhooks import Webhooks
 
 __all__ = [
     "Documents",
@@ -16,4 +17,5 @@ __all__ = [
     "Conversations",
     "AccountResource",
     "Billing",
+    "Webhooks",
 ]

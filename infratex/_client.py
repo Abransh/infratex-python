@@ -16,6 +16,7 @@ from .resources.collections import Collections
 from .resources.conversations import Conversations
 from .resources.account import AccountResource
 from .resources.billing import Billing
+from .resources.webhooks import Webhooks
 
 __all__ = ["Infratex"]
 
@@ -44,6 +45,7 @@ class Infratex:
     conversations: Conversations
     account: AccountResource
     billing: Billing
+    webhooks: Webhooks
 
     def __init__(
         self,
@@ -75,6 +77,7 @@ class Infratex:
         self.conversations = Conversations(self._http)
         self.account = AccountResource(self._http)
         self.billing = Billing(self._http)
+        self.webhooks = Webhooks(self._http)
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""

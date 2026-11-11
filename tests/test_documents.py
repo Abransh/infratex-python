@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
+
 import httpx
 import pytest
 
-from infratex import BinaryResponse, DocumentFigure, InfratexError
+from infratex import BinaryResponse, DocumentFigure, DocumentLayout, DocumentRegion, InfratexError
 
 from .conftest import ClientFactory, form_value, multipart_parts
 
@@ -207,3 +209,104 @@ def test_download_figure_raises_on_missing_figure(make_client: ClientFactory) ->
 
     assert excinfo.value.status_code == 404
     assert str(excinfo.value) == "Figure not found"
+
+
+def test_upload_sends_gamma_options_as_json(make_client: ClientFactory, tmp_path: Path) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload(
+        str(pdf),
+        method="infratex-gamma",
+        options={"merge_tables": False, "ignore_labels": ["header", "footer"]},
+        wait=False,
+    )
+    client.documents.upload(str(pdf), wait=False)
+
+    with_options, without_options = (multipart_parts(r) for r in recorder.requests)
+    assert json.loads(form_value(with_options, "options") or "") == {
+        "merge_tables": False,
+        "ignore_labels": ["header", "footer"],
+    }
+    assert "options" not in without_options
+
+
+def test_upload_images_sends_options(make_client: ClientFactory, tmp_path: Path) -> None:
+    page = tmp_path / "page-1.png"
+    page.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload_images([str(page)], method="infratex-gamma", options={"unwarp": True}, wait=False)
+
+    assert json.loads(form_value(multipart_parts(recorder.last), "options") or "") == {"unwarp": True}
+
+
+def test_create_calls_send_the_idempotency_key(make_client: ClientFactory, tmp_path: Path) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    page = tmp_path / "page-1.png"
+    page.write_bytes(b"\x89PNG\r\n\x1a\n")
+    index = {
+        "id": "idx-1", "document_id": "doc-1", "method": "hybrid", "status": "pending",
+        "created_at": "2026-11-10T10:00:00Z", "updated_at": "2026-11-10T10:00:00Z",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/indexes"):
+            return httpx.Response(202, json=index)
+        return _queued(request)
+
+    client, recorder = make_client(handler)
+
+    client.documents.upload(str(pdf), idempotency_key="upload-key", wait=False)
+    client.documents.upload_images([str(page)], idempotency_key="images-key", wait=False)
+    client.documents.index("doc-1", method="hybrid", idempotency_key="index-key", wait=False)
+    client.documents.upload(str(pdf), wait=False)
+
+    keys = [r.headers.get("idempotency-key") for r in recorder.requests]
+    assert keys == ["upload-key", "images-key", "index-key", None]
+
+
+_LAYOUT = {
+    "document_id": "doc-1",
+    "pages": [
+        {
+            "page": 1,
+            "width": 1240.0,
+            "height": 1754.0,
+            "regions": [
+                {"id": 0, "label": "title", "bbox": [100.0, 80.0, 900.0, 140.0], "content": "Annual report", "page": 1},
+            ],
+        }
+    ],
+}
+
+
+def test_layout_returns_typed_pages_and_regions(make_client: ClientFactory) -> None:
+    client, recorder = make_client(lambda request: httpx.Response(200, json=_LAYOUT))
+
+    layout = client.documents.layout("doc-1")
+
+    assert recorder.last.url.path == "/api/v1/documents/doc-1/layout"
+    assert isinstance(layout, DocumentLayout)
+    assert len(layout) == 1
+    (page,) = list(layout)
+    assert (page.page, page.width, page.height) == (1, 1240.0, 1754.0)
+    (region,) = page.regions
+    assert isinstance(region, DocumentRegion)
+    assert (region.label, region.bbox, region.content) == ("title", [100.0, 80.0, 900.0, 140.0], "Annual report")
+
+
+def test_layout_raises_for_other_methods(make_client: ClientFactory) -> None:
+    client, _ = make_client(
+        lambda request: httpx.Response(
+            404,
+            json={"error": {"code": "layout_not_available", "message": "This document has no layout.", "request_id": "r"}},
+        )
+    )
+
+    with pytest.raises(InfratexError) as excinfo:
+        client.documents.layout("doc-1")
+
+    assert excinfo.value.code == "layout_not_available"
