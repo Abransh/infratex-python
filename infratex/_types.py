@@ -55,6 +55,29 @@ class DocumentIndex(_Base):
         super().__init__(_coerce_index_payload(data))
 
 
+class DocumentProgress(_Base):
+    """Where a pending or processing document's parse is.
+
+    ``stage`` is ``"queued"`` (waiting for a worker, also after a stopped run
+    went back to the queue), ``"parsing"`` (pages being read) or
+    ``"finishing"`` (every page through; the result is being stored).
+    ``pages_done`` counts finished pages out of ``pages_total``, including
+    pages kept from a stopped run and pages that failed. ``attempt`` is ``0``
+    while waiting for the first run and goes up when a stopped run went back
+    to the queue; the document fails after ``max_attempts``. ``updated_at`` is
+    when it entered the queue (``queued``) or the worker's last report, at
+    least every 30 seconds (``parsing`` / ``finishing``): several minutes old
+    means the run has stopped.
+    """
+
+    stage: str
+    pages_done: int
+    pages_total: Optional[int]
+    attempt: int
+    max_attempts: int
+    updated_at: str
+
+
 class Document(_Base):
     id: str
     filename: str
@@ -71,10 +94,15 @@ class Document(_Base):
     upload_time: Optional[str]
     extraction_pages: Optional[List[Dict[str, Any]]]
     indexes: Optional[List[DocumentIndex]]
+    #: Set while the document is ``pending`` or ``processing``; ``None`` once it
+    #: is parsed or failed (and for a moment while processing starts).
+    progress: Optional[DocumentProgress]
 
     def __init__(self, data: Dict[str, Any]) -> None:
         super().__init__(data)
         self.indexes = [DocumentIndex(_coerce_index_payload(item)) for item in data.get("indexes", [])]
+        raw_progress = data.get("progress")
+        self.progress = DocumentProgress(raw_progress) if isinstance(raw_progress, dict) else None
 
 
 class UploadedDocument(_Base):

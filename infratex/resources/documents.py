@@ -8,6 +8,7 @@ import time
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Literal,
@@ -24,6 +25,7 @@ from .._types import (
     DocumentLayout,
     DocumentList,
     Document,
+    DocumentProgress,
     Index,
     UploadedDocument,
 )
@@ -42,6 +44,9 @@ TableFormat = Literal["otsl", "html"]
 ParseOptions = Mapping[str, Any]
 
 IDEMPOTENCY_HEADER = "Idempotency-Key"
+
+#: Called by :meth:`Documents.wait_until_parsed` with each new progress.
+ProgressCallback = Callable[[DocumentProgress], None]
 
 _PARSED_STATES = {"parsed", "indexed", "done"}
 
@@ -406,15 +411,44 @@ class Documents:
         )
         return Document(resp)
 
-    def wait_until_parsed(self, document_id: str) -> UploadedDocument:
-        """Block until the document finishes parsing and return its markdown payload."""
-        return self._wait_for_uploaded_document(document_id)
+    def wait_until_parsed(
+        self,
+        document_id: str,
+        *,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> UploadedDocument:
+        """Block until the document finishes parsing and return its markdown payload.
 
-    def _wait_for_uploaded_document(self, document_id: str) -> UploadedDocument:
+        ``on_progress`` is called with the document's
+        :class:`~infratex.DocumentProgress` each time it differs from the last
+        one seen: a new stage, page count or attempt, or a fresh
+        ``updated_at`` from the worker's keepalive. It is not called while the
+        API reports no progress.
+
+        Raises :class:`~infratex.InfratexError` with the document's
+        ``error_message`` (code ``document_processing_failed``) when the parse
+        fails, and code ``upload_timeout`` when the client ``timeout`` runs out
+        first; both carry the document id, and the timeout the last progress,
+        in ``details``.
+        """
+        return self._wait_for_uploaded_document(document_id, on_progress=on_progress)
+
+    def _wait_for_uploaded_document(
+        self,
+        document_id: str,
+        *,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> UploadedDocument:
         deadline = time.monotonic() + self._client.timeout_seconds
+        last_progress: Optional[Dict[str, Any]] = None
 
         while True:
             document = self.get(document_id, wait=False)
+            progress = document.progress
+            if progress is not None and progress.to_dict() != last_progress:
+                last_progress = progress.to_dict()
+                if on_progress is not None:
+                    on_progress(progress)
             if document.status in _PARSED_STATES:
                 return UploadedDocument(
                     {
@@ -434,12 +468,14 @@ class Documents:
                     document.error_message or "Document processing failed",
                     status_code=409,
                     code="document_processing_failed",
+                    details={"document_id": document_id},
                 )
             if time.monotonic() >= deadline:
                 raise InfratexError(
                     "Document processing timed out",
                     status_code=504,
                     code="upload_timeout",
+                    details={"document_id": document_id, "progress": last_progress},
                 )
             time.sleep(self._poll_interval_seconds)
 

@@ -3,6 +3,7 @@
 from ._client import Infratex
 from ._http import (
     BinaryResponse,
+    EncryptedPDFError,
     InfratexError,
     InvalidPipelineError,
     PipelineNotAvailableError,
@@ -25,6 +26,7 @@ from ._types import (
     DocumentLayout,
     DocumentLayoutPage,
     DocumentList,
+    DocumentProgress,
     DocumentRegion,
     ExtractionPipelineInfo,
     ExtractionPipelines,
@@ -47,6 +49,7 @@ __all__ = [
     "InfratexError",
     "InvalidPipelineError",
     "PipelineNotAvailableError",
+    "EncryptedPDFError",
     "BinaryResponse",
     "verify_webhook_signature",
     "SIGNATURE_HEADER",
@@ -66,6 +69,7 @@ __all__ = [
     "DocumentLayout",
     "DocumentLayoutPage",
     "DocumentList",
+    "DocumentProgress",
     "DocumentRegion",
     "ExtractionPipelineInfo",
     "ExtractionPipelines",

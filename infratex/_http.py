@@ -15,6 +15,7 @@ __all__ = [
     "InfratexError",
     "InvalidPipelineError",
     "PipelineNotAvailableError",
+    "EncryptedPDFError",
     "BinaryResponse",
 ]
 
@@ -109,9 +110,17 @@ class PipelineNotAvailableError(InfratexError):
         return list((self.details or {}).get("available_pipelines") or [])
 
 
+class EncryptedPDFError(InfratexError):
+    """400 ``encrypted_pdf``: the uploaded PDF needs a password to open, so its
+    pages cannot be read. Remove the password and upload it again. Refused
+    before any credits are held. A PDF with only an owner password is
+    accepted."""
+
+
 _ERRORS_BY_CODE: Dict[str, Type[InfratexError]] = {
     "invalid_pipeline": InvalidPipelineError,
     "pipeline_not_available": PipelineNotAvailableError,
+    "encrypted_pdf": EncryptedPDFError,
 }
 
 

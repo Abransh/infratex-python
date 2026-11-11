@@ -86,7 +86,13 @@ one parsed as `html` only as HTML.
 `documents.upload(...)` also accepts a Word `.docx`. It is read from the file itself (no
 model call) and billed at the `standard` price whatever `method` you send; the document
 reports `standard` as its method. Legacy `.doc` and macro-enabled `.docm` files are
-rejected with status 415.
+rejected with status 415. A PDF that needs a password to open is rejected at upload with
+`EncryptedPDFError` (400 `encrypted_pdf`), before any credits are held: remove the password
+and upload it again.
+
+If a parse fails, `wait_until_parsed(...)` (and `upload(...)` with the default `wait=True`)
+raises `InfratexError` with the document's `error_message`, which says what went wrong and
+what to do; a failed document is not charged.
 
 ## Resources
 
@@ -115,6 +121,14 @@ images = client.documents.upload_images(["page-1.png", "page-2.png"], method="st
 # Queue-first if you want to manage the parse lifecycle yourself.
 queued = client.documents.upload("report.pdf", wait=False)
 doc = client.documents.wait_until_parsed(queued.id)   # or: client.documents.get(queued.id, wait=True)
+
+# Progress while pending or processing (None once parsed or failed): stage is
+# "queued", "parsing" or "finishing"; updated_at is refreshed at least every 30 s while it runs.
+doc = client.documents.wait_until_parsed(
+    queued.id,
+    on_progress=lambda p: print(p.stage, p.pages_done, "/", p.pages_total, "attempt", p.attempt, "of", p.max_attempts),
+)
+progress = client.documents.get(queued.id).progress
 
 # List / get / markdown
 docs = client.documents.list(limit=50, offset=0, collection_id="col-id")
@@ -387,8 +401,9 @@ except InfratexError as e:
     print(e.retry_after)  # Retry-After in seconds (429, 409 idempotency_request_in_progress)
 ```
 
-`InvalidPipelineError` and `PipelineNotAvailableError` are subclasses of `InfratexError`
-for the two extraction `pipeline` refusals; every other API error code is in `e.code`.
+`InvalidPipelineError` and `PipelineNotAvailableError` (the two extraction `pipeline`
+refusals) and `EncryptedPDFError` (a password-protected PDF upload) are subclasses of
+`InfratexError`; every other API error code is in `e.code`.
 
 ### Retries and idempotency
 

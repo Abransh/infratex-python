@@ -43,6 +43,15 @@ Python and Node.js SDKs ship the same API changes under the same version number.
   `WebhookDeliveryList`. API docs: Webhooks.
 - `verify_webhook_signature(secret, body, header)`, plus the `SIGNATURE_HEADER` and
   `EVENT_ID_HEADER` names. API docs: Webhooks, "Signatures".
+- `Document.progress` (`DocumentProgress`: `stage` `"queued"` | `"parsing"` | `"finishing"`,
+  `pages_done`, `pages_total`, `attempt`, `max_attempts`, `updated_at`), set while a document
+  is `pending` or `processing` and `None` otherwise. API docs: Parsing, "Progress" (API PR #200).
+- `on_progress` on `documents.wait_until_parsed(...)`: called with the document's progress each
+  time it changes (stage, pages, attempt, or the worker's keepalive `updated_at`). API docs:
+  Parsing, "Progress" and "When processing stalls".
+- `EncryptedPDFError` (400 `encrypted_pdf`, a PDF that needs a password to open), a subclass of
+  `InfratexError`, raised by uploads before any credits are held. API docs: Reference, Errors
+  (400).
 - `InfratexError.request_id` (the request's id, from the error body or `X-Request-ID`) and
   `InfratexError.retry_after` (the `Retry-After` header in seconds). API docs: Reference,
   "Retries and idempotency".
@@ -56,6 +65,13 @@ Python and Node.js SDKs ship the same API changes under the same version number.
   list of field errors is under `details["errors"]`.
 - A client built with your own `httpx_client` now sends the API key and `User-Agent` on every
   request; before, those headers were set only on the client the SDK created.
+
+### Changed
+
+- When a parse fails, `wait_until_parsed(...)` still raises `InfratexError` with the document's
+  `error_message` (code `document_processing_failed`); the error now also carries
+  `details["document_id"]`. Its timeout (`upload_timeout`) carries the document id and the last
+  progress seen. API docs: Parsing, "Document status".
 
 ### Not covered yet
 

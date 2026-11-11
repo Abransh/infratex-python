@@ -7,7 +7,17 @@ import json
 import httpx
 import pytest
 
-from infratex import BinaryResponse, DocumentFigure, DocumentLayout, DocumentRegion, InfratexError
+from typing import Any, Dict, Iterator, List, Optional
+
+from infratex import (
+    BinaryResponse,
+    DocumentFigure,
+    DocumentLayout,
+    DocumentProgress,
+    DocumentRegion,
+    EncryptedPDFError,
+    InfratexError,
+)
 
 from .conftest import ClientFactory, form_value, multipart_parts
 
@@ -310,3 +320,145 @@ def test_layout_raises_for_other_methods(make_client: ClientFactory) -> None:
         client.documents.layout("doc-1")
 
     assert excinfo.value.code == "layout_not_available"
+
+
+def _progress(stage: str, done: int, attempt: int = 1, updated: str = "2026-11-10T09:41:07Z") -> Dict[str, Any]:
+    return {
+        "stage": stage,
+        "pages_done": done,
+        "pages_total": 3,
+        "attempt": attempt,
+        "max_attempts": 3,
+        "updated_at": updated,
+    }
+
+
+def _document(status: str, progress: Optional[Dict[str, Any]], error: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "id": "doc-1", "filename": "report.pdf", "status": status, "method": "standard",
+        "page_count": 3, "processing_time_ms": 900, "error_message": error, "collection_id": None,
+        "extraction_pages": None, "upload_time": "2026-11-10T09:40:00Z", "progress": progress,
+    }
+
+
+def test_get_returns_typed_progress(make_client: ClientFactory) -> None:
+    client, _ = make_client(
+        lambda request: httpx.Response(200, json=_document("processing", _progress("parsing", 2)))
+    )
+
+    document = client.documents.get("doc-1")
+
+    assert isinstance(document.progress, DocumentProgress)
+    progress = document.progress
+    assert (progress.stage, progress.pages_done, progress.pages_total) == ("parsing", 2, 3)
+    assert (progress.attempt, progress.max_attempts) == (1, 3)
+    assert progress.updated_at == "2026-11-10T09:41:07Z"
+
+
+def test_progress_is_none_when_absent_or_null(make_client: ClientFactory) -> None:
+    client, _ = make_client(lambda request: httpx.Response(200, json=_document("parsed", None)))
+    assert client.documents.get("doc-1").progress is None
+
+    client, _ = make_client(lambda request: httpx.Response(200, json=_QUEUED))
+    assert client.documents.get("doc-1").progress is None
+
+
+def _sequence(*documents: Dict[str, Any]) -> Any:
+    states: Iterator[Dict[str, Any]] = iter(documents)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/markdown"):
+            return httpx.Response(200, text="<!-- page:1 -->", headers={"content-type": "text/markdown"})
+        return httpx.Response(200, json=next(states))
+
+    return handler
+
+
+def test_wait_until_parsed_reports_each_new_progress(make_client: ClientFactory) -> None:
+    client, _ = make_client(
+        _sequence(
+            _document("pending", _progress("queued", 0, attempt=0)),
+            _document("processing", None),
+            _document("processing", _progress("parsing", 1)),
+            _document("processing", _progress("parsing", 1)),
+            _document("processing", _progress("parsing", 1, updated="2026-11-10T09:41:37Z")),
+            _document("processing", _progress("finishing", 3)),
+            _document("parsed", None),
+        )
+    )
+    client.documents._poll_interval_seconds = 0
+    seen: List[DocumentProgress] = []
+
+    uploaded = client.documents.wait_until_parsed("doc-1", on_progress=seen.append)
+
+    assert [(p.stage, p.pages_done, p.attempt, p.updated_at) for p in seen] == [
+        ("queued", 0, 0, "2026-11-10T09:41:07Z"),
+        ("parsing", 1, 1, "2026-11-10T09:41:07Z"),
+        ("parsing", 1, 1, "2026-11-10T09:41:37Z"),
+        ("finishing", 3, 1, "2026-11-10T09:41:07Z"),
+    ]
+    assert uploaded.status == "parsed"
+    assert uploaded.markdown == "<!-- page:1 -->"
+
+
+def test_wait_until_parsed_works_without_a_callback(make_client: ClientFactory) -> None:
+    client, _ = make_client(
+        _sequence(_document("processing", _progress("parsing", 1)), _document("parsed", None))
+    )
+    client.documents._poll_interval_seconds = 0
+
+    assert client.documents.wait_until_parsed("doc-1").status == "parsed"
+
+
+def test_wait_until_parsed_raises_the_document_error_message(make_client: ClientFactory) -> None:
+    message = "The PDF is password-protected, so its pages could not be read. No credits were charged."
+    client, _ = make_client(
+        _sequence(_document("processing", _progress("parsing", 0)), _document("error", None, error=message))
+    )
+    client.documents._poll_interval_seconds = 0
+
+    with pytest.raises(InfratexError) as excinfo:
+        client.documents.wait_until_parsed("doc-1")
+
+    assert str(excinfo.value) == message
+    assert excinfo.value.code == "document_processing_failed"
+    assert excinfo.value.details == {"document_id": "doc-1"}
+
+
+def test_wait_until_parsed_timeout_carries_the_last_progress(make_client: ClientFactory) -> None:
+    client, _ = make_client(lambda request: httpx.Response(200, json=_document("processing", _progress("parsing", 2))))
+    client._http.timeout_seconds = 0
+    client.documents._poll_interval_seconds = 0
+
+    with pytest.raises(InfratexError) as excinfo:
+        client.documents.wait_until_parsed("doc-1")
+
+    assert excinfo.value.code == "upload_timeout"
+    assert excinfo.value.details == {"document_id": "doc-1", "progress": _progress("parsing", 2)}
+
+
+def test_upload_of_a_password_protected_pdf_raises_encrypted_pdf_error(
+    make_client: ClientFactory, tmp_path: Path
+) -> None:
+    pdf = tmp_path / "locked.pdf"
+    pdf.write_bytes(b"%PDF-1.7 encrypted")
+    client, _ = make_client(
+        lambda request: httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "encrypted_pdf",
+                    "message": "The PDF is password-protected. Remove the password and upload it again.",
+                    "request_id": "req-3",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(EncryptedPDFError) as excinfo:
+        client.documents.upload(str(pdf), wait=False)
+
+    assert isinstance(excinfo.value, InfratexError)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.code == "encrypted_pdf"
+    assert "password-protected" in str(excinfo.value)
