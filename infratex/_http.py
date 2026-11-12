@@ -16,6 +16,10 @@ __all__ = [
     "InvalidPipelineError",
     "PipelineNotAvailableError",
     "EncryptedPDFError",
+    "InvalidEngineVersionError",
+    "EngineVersionNotSupportedError",
+    "InvalidSpeedError",
+    "SpeedNotSupportedError",
     "BinaryResponse",
 ]
 
@@ -117,10 +121,43 @@ class EncryptedPDFError(InfratexError):
     accepted."""
 
 
+class _AllowedValuesError(InfratexError):
+    @property
+    def allowed(self) -> List[str]:
+        """The valid values the API listed in ``details["allowed"]``; empty
+        when it sent none."""
+        return list((self.details or {}).get("allowed") or [])
+
+
+class InvalidEngineVersionError(_AllowedValuesError):
+    """422 ``invalid_engine_version``: the upload's ``engine_version`` is not
+    one the API knows. ``allowed`` lists the versions it accepts."""
+
+
+class EngineVersionNotSupportedError(_AllowedValuesError):
+    """422 ``engine_version_not_supported``: ``engine_version`` was sent with a
+    parse method that has no engine versions to choose from. Only
+    ``standard-ultra-2`` takes it."""
+
+
+class InvalidSpeedError(_AllowedValuesError):
+    """422 ``invalid_speed``: the upload's ``speed`` is not ``"standard"`` or
+    ``"fast"``. ``allowed`` lists the speeds the API accepts."""
+
+
+class SpeedNotSupportedError(_AllowedValuesError):
+    """422 ``speed_not_supported``: ``speed="fast"`` was sent with a parse
+    method that has no fast speed. Only ``standard-ultra-2`` takes it."""
+
+
 _ERRORS_BY_CODE: Dict[str, Type[InfratexError]] = {
     "invalid_pipeline": InvalidPipelineError,
     "pipeline_not_available": PipelineNotAvailableError,
     "encrypted_pdf": EncryptedPDFError,
+    "invalid_engine_version": InvalidEngineVersionError,
+    "engine_version_not_supported": EngineVersionNotSupportedError,
+    "invalid_speed": InvalidSpeedError,
+    "speed_not_supported": SpeedNotSupportedError,
 }
 
 

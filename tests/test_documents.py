@@ -17,6 +17,9 @@ from infratex import (
     DocumentRegion,
     EncryptedPDFError,
     InfratexError,
+    ParseEngine,
+    ParseEngines,
+    ParseEngineVersionInfo,
 )
 
 from .conftest import ClientFactory, form_value, multipart_parts
@@ -462,3 +465,130 @@ def test_upload_of_a_password_protected_pdf_raises_encrypted_pdf_error(
     assert excinfo.value.status_code == 400
     assert excinfo.value.code == "encrypted_pdf"
     assert "password-protected" in str(excinfo.value)
+
+
+def test_upload_sends_engine_version_and_speed_only_when_given(
+    make_client: ClientFactory, tmp_path: Path
+) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload(
+        str(pdf), method="standard-ultra-2", engine_version="2.5", speed="fast", wait=False
+    )
+    client.documents.upload(str(pdf), method="standard-ultra-2", wait=False)
+
+    with_fields, without_fields = (multipart_parts(r) for r in recorder.requests)
+    assert recorder.requests[0].url.path == "/api/v1/documents"
+    assert form_value(with_fields, "method") == "standard-ultra-2"
+    assert form_value(with_fields, "engine_version") == "2.5"
+    assert form_value(with_fields, "speed") == "fast"
+    assert "engine_version" not in without_fields
+    assert "speed" not in without_fields
+
+
+def test_upload_images_sends_engine_version_and_speed(
+    make_client: ClientFactory, tmp_path: Path
+) -> None:
+    page = tmp_path / "page-1.png"
+    page.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload_images(
+        [str(page)], method="standard-ultra-2", engine_version="2.0", speed="standard", wait=False
+    )
+    client.documents.upload_images([str(page)], wait=False)
+
+    with_fields, without_fields = (multipart_parts(r) for r in recorder.requests)
+    assert recorder.requests[0].url.path == "/api/v1/documents/images"
+    assert form_value(with_fields, "engine_version") == "2.0"
+    assert form_value(with_fields, "speed") == "standard"
+    assert "engine_version" not in without_fields
+    assert "speed" not in without_fields
+
+
+def test_upload_passes_unknown_values_through_to_the_api(
+    make_client: ClientFactory, tmp_path: Path
+) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    client, recorder = make_client(_queued)
+
+    client.documents.upload(  # type: ignore[call-overload]
+        str(pdf), method="standard-ultra-2", engine_version="3.0", speed="turbo", wait=False
+    )
+
+    parts = multipart_parts(recorder.last)
+    assert (form_value(parts, "engine_version"), form_value(parts, "speed")) == ("3.0", "turbo")
+
+
+def test_documents_report_engine_version_and_speed(make_client: ClientFactory) -> None:
+    ultra = dict(_document("parsed", None), method="standard-ultra-2", engine_version="2.5", speed="fast")
+    client, _ = make_client(lambda request: httpx.Response(200, json=ultra))
+    document = client.documents.get("doc-1")
+    assert (document.engine_version, document.speed) == ("2.5", "fast")
+
+    client, _ = make_client(lambda request: httpx.Response(200, json=_QUEUED))
+    document = client.documents.get("doc-1")
+    assert (document.engine_version, document.speed) == (None, None)
+
+
+def test_waited_upload_reports_engine_version_and_speed(
+    make_client: ClientFactory, tmp_path: Path
+) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    parsed = dict(_document("parsed", None), method="standard-ultra-2", engine_version="2.0", speed="fast")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return _queued(request)
+        if request.url.path.endswith("/markdown"):
+            return httpx.Response(200, text="<!-- page:1 -->", headers={"content-type": "text/markdown"})
+        return httpx.Response(200, json=parsed)
+
+    client, _ = make_client(handler)
+
+    uploaded = client.documents.upload(
+        str(pdf), method="standard-ultra-2", engine_version="2.0", speed="fast"
+    )
+
+    assert (uploaded.engine_version, uploaded.speed) == ("2.0", "fast")
+
+
+_PARSE_ENGINES = [
+    {"method": "standard", "versions": [], "speeds": ["standard"]},
+    {
+        "method": "standard-ultra-2",
+        "versions": [
+            {"version": "2.0", "status": "stable", "default": True},
+            {"version": "2.5", "status": "beta", "default": False},
+        ],
+        "speeds": ["standard", "fast"],
+    },
+]
+
+
+def test_parse_engines_returns_typed_engines(make_client: ClientFactory) -> None:
+    client, recorder = make_client(lambda request: httpx.Response(200, json=_PARSE_ENGINES))
+
+    engines = client.documents.parse_engines()
+
+    assert recorder.last.method == "GET"
+    assert recorder.last.url.path == "/api/v1/parse-engines"
+    assert isinstance(engines, ParseEngines)
+    assert [e.method for e in engines] == ["standard", "standard-ultra-2"]
+    ultra = engines.get("standard-ultra-2")
+    assert isinstance(ultra, ParseEngine)
+    assert all(isinstance(v, ParseEngineVersionInfo) for v in ultra.versions)
+    assert [(v.version, v.status, v.default) for v in ultra.versions] == [
+        ("2.0", "stable", True),
+        ("2.5", "beta", False),
+    ]
+    assert ultra.speeds == ["standard", "fast"]
+    assert ultra.default_version == "2.0"
+    standard = engines.get("standard")
+    assert standard is not None and standard.default_version is None
+    assert engines.get("max") is None
+    assert len(engines) == 2
