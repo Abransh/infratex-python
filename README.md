@@ -83,22 +83,14 @@ returns Markdown pipe tables). It is stored with the document: a document parsed
 `otsl` can be read back as either syntax with `documents.markdown(id, table_format=...)`,
 one parsed as `html` only as HTML.
 
-`standard-ultra-2` also takes an engine version and a speed:
-
-| Parameter | Values | Notes |
-|-----------|--------|-------|
-| `engine_version` | `"2.0"` (default), `"2.5"` | `"2.0"` is the stable engine, `"2.5"` the beta. |
-| `speed` | `"standard"` (default), `"fast"` | Fast pages cost 4x the page price (12 credits/page). |
-
-Both are sent only when you set them, on `documents.upload(...)` and
-`documents.upload_images(...)`, and the document reports what it was parsed with in
-`doc.engine_version` and `doc.speed` (`None` for methods without these choices). Any other
-method rejects them: `engine_version` with `EngineVersionNotSupportedError` (422
-`engine_version_not_supported`), `speed="fast"` with `SpeedNotSupportedError` (422
-`speed_not_supported`). A value the API does not know raises `InvalidEngineVersionError` (422
-`invalid_engine_version`) or `InvalidSpeedError` (422 `invalid_speed`); each error's `allowed`
-lists the valid values. `client.documents.parse_engines()` lists every method's engine
-versions and speeds (available once the API release that adds it ships).
+`standard-ultra-2` also takes an `engine_version`: `"2.0"` (the stable engine and the
+default) or `"2.5"` (beta). It is sent only when you set it, on `documents.upload(...)` and
+`documents.upload_images(...)`, and the document reports the version it was parsed with in
+`doc.engine_version` (`None` for methods without engine versions). Any other method rejects
+it with `EngineVersionNotSupportedError` (422 `engine_version_not_supported`); a version the
+API does not know raises `InvalidEngineVersionError` (422 `invalid_engine_version`). Each
+error's `allowed` lists the valid values. `client.documents.parse_engines()` lists every
+method's engine versions (available once the API release that adds it ships).
 
 `documents.upload(...)` also accepts a Word `.docx`. It is read from the file itself (no
 model call) and billed at the `standard` price whatever `method` you send; the document
@@ -132,14 +124,14 @@ for page in client.documents.layout(doc.id):
     for region in page.regions:
         print(page.page, region.label, region.bbox)   # bbox in pixels of a page.width x page.height image
 
-# standard-ultra-2: pick the engine version ("2.0" stable, "2.5" beta) and speed ("fast" = 4x price).
-doc = client.documents.upload("report.pdf", method="standard-ultra-2", engine_version="2.5", speed="fast")
-print(doc.engine_version, doc.speed)   # "2.5" "fast"
+# standard-ultra-2: pick the engine version ("2.0" stable and the default, "2.5" beta).
+doc = client.documents.upload("report.pdf", method="standard-ultra-2", engine_version="2.5")
+print(doc.engine_version)   # "2.5"
 
-# Which engine versions and speeds each method offers.
+# Which engine versions each method offers.
 ultra = client.documents.parse_engines().get("standard-ultra-2")
 if ultra is not None:
-    print(ultra.default_version, [(v.version, v.status) for v in ultra.versions], ultra.speeds)
+    print(ultra.default_version, [(v.version, v.status) for v in ultra.versions])
 
 # Upload an ordered image batch as document pages (file order = page order).
 images = client.documents.upload_images(["page-1.png", "page-2.png"], method="standard")
@@ -429,10 +421,9 @@ except InfratexError as e:
 
 `InvalidPipelineError` and `PipelineNotAvailableError` (the two extraction `pipeline`
 refusals), `EncryptedPDFError` (a password-protected PDF upload), and
-`InvalidEngineVersionError`, `EngineVersionNotSupportedError`, `InvalidSpeedError` and
-`SpeedNotSupportedError` (the upload `engine_version` and `speed` refusals, with the valid
-values in `e.allowed`) are subclasses of `InfratexError`; every other API error code is in
-`e.code`.
+`InvalidEngineVersionError` and `EngineVersionNotSupportedError` (the upload
+`engine_version` refusals, with the valid values in `e.allowed`) are subclasses of
+`InfratexError`; every other API error code is in `e.code`.
 
 ### Retries and idempotency
 

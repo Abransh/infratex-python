@@ -467,48 +467,40 @@ def test_upload_of_a_password_protected_pdf_raises_encrypted_pdf_error(
     assert "password-protected" in str(excinfo.value)
 
 
-def test_upload_sends_engine_version_and_speed_only_when_given(
+def test_upload_sends_engine_version_only_when_given(
     make_client: ClientFactory, tmp_path: Path
 ) -> None:
     pdf = tmp_path / "report.pdf"
     pdf.write_bytes(b"%PDF-1.7 test")
     client, recorder = make_client(_queued)
 
-    client.documents.upload(
-        str(pdf), method="standard-ultra-2", engine_version="2.5", speed="fast", wait=False
-    )
+    client.documents.upload(str(pdf), method="standard-ultra-2", engine_version="2.5", wait=False)
     client.documents.upload(str(pdf), method="standard-ultra-2", wait=False)
 
-    with_fields, without_fields = (multipart_parts(r) for r in recorder.requests)
+    with_version, without_version = (multipart_parts(r) for r in recorder.requests)
     assert recorder.requests[0].url.path == "/api/v1/documents"
-    assert form_value(with_fields, "method") == "standard-ultra-2"
-    assert form_value(with_fields, "engine_version") == "2.5"
-    assert form_value(with_fields, "speed") == "fast"
-    assert "engine_version" not in without_fields
-    assert "speed" not in without_fields
+    assert form_value(with_version, "method") == "standard-ultra-2"
+    assert form_value(with_version, "engine_version") == "2.5"
+    assert "engine_version" not in without_version
 
 
-def test_upload_images_sends_engine_version_and_speed(
+def test_upload_images_sends_engine_version_only_when_given(
     make_client: ClientFactory, tmp_path: Path
 ) -> None:
     page = tmp_path / "page-1.png"
     page.write_bytes(b"\x89PNG\r\n\x1a\n")
     client, recorder = make_client(_queued)
 
-    client.documents.upload_images(
-        [str(page)], method="standard-ultra-2", engine_version="2.0", speed="standard", wait=False
-    )
+    client.documents.upload_images([str(page)], method="standard-ultra-2", engine_version="2.0", wait=False)
     client.documents.upload_images([str(page)], wait=False)
 
-    with_fields, without_fields = (multipart_parts(r) for r in recorder.requests)
+    with_version, without_version = (multipart_parts(r) for r in recorder.requests)
     assert recorder.requests[0].url.path == "/api/v1/documents/images"
-    assert form_value(with_fields, "engine_version") == "2.0"
-    assert form_value(with_fields, "speed") == "standard"
-    assert "engine_version" not in without_fields
-    assert "speed" not in without_fields
+    assert form_value(with_version, "engine_version") == "2.0"
+    assert "engine_version" not in without_version
 
 
-def test_upload_passes_unknown_values_through_to_the_api(
+def test_upload_passes_an_unknown_engine_version_through_to_the_api(
     make_client: ClientFactory, tmp_path: Path
 ) -> None:
     pdf = tmp_path / "report.pdf"
@@ -516,30 +508,27 @@ def test_upload_passes_unknown_values_through_to_the_api(
     client, recorder = make_client(_queued)
 
     client.documents.upload(  # type: ignore[call-overload]
-        str(pdf), method="standard-ultra-2", engine_version="3.0", speed="turbo", wait=False
+        str(pdf), method="standard-ultra-2", engine_version="3.0", wait=False
     )
 
-    parts = multipart_parts(recorder.last)
-    assert (form_value(parts, "engine_version"), form_value(parts, "speed")) == ("3.0", "turbo")
+    assert form_value(multipart_parts(recorder.last), "engine_version") == "3.0"
 
 
-def test_documents_report_engine_version_and_speed(make_client: ClientFactory) -> None:
-    ultra = dict(_document("parsed", None), method="standard-ultra-2", engine_version="2.5", speed="fast")
+def test_documents_report_engine_version(make_client: ClientFactory) -> None:
+    ultra = dict(_document("parsed", None), method="standard-ultra-2", engine_version="2.5")
     client, _ = make_client(lambda request: httpx.Response(200, json=ultra))
-    document = client.documents.get("doc-1")
-    assert (document.engine_version, document.speed) == ("2.5", "fast")
+    assert client.documents.get("doc-1").engine_version == "2.5"
 
     client, _ = make_client(lambda request: httpx.Response(200, json=_QUEUED))
-    document = client.documents.get("doc-1")
-    assert (document.engine_version, document.speed) == (None, None)
+    assert client.documents.get("doc-1").engine_version is None
 
 
-def test_waited_upload_reports_engine_version_and_speed(
+def test_waited_upload_reports_engine_version(
     make_client: ClientFactory, tmp_path: Path
 ) -> None:
     pdf = tmp_path / "report.pdf"
     pdf.write_bytes(b"%PDF-1.7 test")
-    parsed = dict(_document("parsed", None), method="standard-ultra-2", engine_version="2.0", speed="fast")
+    parsed = dict(_document("parsed", None), method="standard-ultra-2", engine_version="2.0")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
@@ -550,22 +539,19 @@ def test_waited_upload_reports_engine_version_and_speed(
 
     client, _ = make_client(handler)
 
-    uploaded = client.documents.upload(
-        str(pdf), method="standard-ultra-2", engine_version="2.0", speed="fast"
-    )
+    uploaded = client.documents.upload(str(pdf), method="standard-ultra-2", engine_version="2.0")
 
-    assert (uploaded.engine_version, uploaded.speed) == ("2.0", "fast")
+    assert uploaded.engine_version == "2.0"
 
 
 _PARSE_ENGINES = [
-    {"method": "standard", "versions": [], "speeds": ["standard"]},
+    {"method": "standard", "versions": []},
     {
         "method": "standard-ultra-2",
         "versions": [
             {"version": "2.0", "status": "stable", "default": True},
             {"version": "2.5", "status": "beta", "default": False},
         ],
-        "speeds": ["standard", "fast"],
     },
 ]
 
@@ -586,7 +572,6 @@ def test_parse_engines_returns_typed_engines(make_client: ClientFactory) -> None
         ("2.0", "stable", True),
         ("2.5", "beta", False),
     ]
-    assert ultra.speeds == ["standard", "fast"]
     assert ultra.default_version == "2.0"
     standard = engines.get("standard")
     assert standard is not None and standard.default_version is None

@@ -40,9 +40,6 @@ TableFormat = Literal["otsl", "html"]
 #: Parse engine version: ``"2.0"`` (stable, the server default) or ``"2.5"``
 #: (beta). ``standard-ultra-2`` only.
 ParseEngineVersion = Literal["2.0", "2.5"]
-#: Parse speed: ``"standard"`` (the server default) or ``"fast"``. ``"fast"`` is
-#: ``standard-ultra-2`` only and bills 4x the page price.
-ParseSpeed = Literal["standard", "fast"]
 #: ``infratex-gamma`` parse options, e.g. ``{"merge_tables": False,
 #: "ignore_labels": ["header", "footer"]}``. Keys and defaults are listed in the
 #: API docs (Parsing, "Parse options"); an unknown key or bad value is a 422
@@ -75,7 +72,6 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         engine_version: Optional[ParseEngineVersion] = None,
-        speed: Optional[ParseSpeed] = None,
         table_format: Optional[TableFormat] = None,
         options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
@@ -90,7 +86,6 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         engine_version: Optional[ParseEngineVersion] = None,
-        speed: Optional[ParseSpeed] = None,
         table_format: Optional[TableFormat] = None,
         options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
@@ -104,7 +99,6 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         engine_version: Optional[ParseEngineVersion] = None,
-        speed: Optional[ParseSpeed] = None,
         table_format: Optional[TableFormat] = None,
         options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
@@ -133,14 +127,6 @@ class Documents:
             :class:`~infratex.EngineVersionNotSupportedError` (422
             ``engine_version_not_supported``). The document reports the
             version it was parsed with in ``engine_version``.
-        speed:
-            ``standard-ultra-2`` only: ``"standard"`` (the server default) or
-            ``"fast"``. Fast pages bill 4x the page price. Sent only when set.
-            Any other value raises :class:`~infratex.InvalidSpeedError` (422
-            ``invalid_speed``); ``"fast"`` with another method raises
-            :class:`~infratex.SpeedNotSupportedError` (422
-            ``speed_not_supported``). The document reports its speed in
-            ``speed``.
         table_format:
             Table syntax the parser emits: ``"otsl"`` (server default) or
             ``"html"``. Stored with the document and not changeable later: a
@@ -167,7 +153,8 @@ class Documents:
             data: Dict[str, Any] = {}
             if method is not None:
                 data["method"] = method
-            data.update(_engine_fields(engine_version, speed))
+            if engine_version is not None:
+                data["engine_version"] = engine_version
             if table_format is not None:
                 data["table_format"] = table_format
             if options is not None:
@@ -194,7 +181,6 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         engine_version: Optional[ParseEngineVersion] = None,
-        speed: Optional[ParseSpeed] = None,
         table_format: Optional[TableFormat] = None,
         options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
@@ -209,7 +195,6 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         engine_version: Optional[ParseEngineVersion] = None,
-        speed: Optional[ParseSpeed] = None,
         table_format: Optional[TableFormat] = None,
         options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
@@ -223,7 +208,6 @@ class Documents:
         *,
         method: Optional[ParseMethod] = None,
         engine_version: Optional[ParseEngineVersion] = None,
-        speed: Optional[ParseSpeed] = None,
         table_format: Optional[TableFormat] = None,
         options: Optional[ParseOptions] = None,
         collection_id: Optional[str] = None,
@@ -244,9 +228,6 @@ class Documents:
         engine_version:
             ``standard-ultra-2`` only: ``"2.0"`` (stable, server default) or
             ``"2.5"`` (beta); see :meth:`upload`.
-        speed:
-            ``standard-ultra-2`` only: ``"standard"`` (server default) or
-            ``"fast"`` (4x the page price); see :meth:`upload`.
         table_format:
             ``"otsl"`` (server default) or ``"html"``; see :meth:`upload`.
         options:
@@ -267,7 +248,8 @@ class Documents:
         data: Dict[str, Any] = {}
         if method is not None:
             data["method"] = method
-        data.update(_engine_fields(engine_version, speed))
+        if engine_version is not None:
+            data["engine_version"] = engine_version
         if table_format is not None:
             data["table_format"] = table_format
         if options is not None:
@@ -392,11 +374,11 @@ class Documents:
         return DocumentLayout(resp)
 
     def parse_engines(self) -> ParseEngines:
-        """The parse methods' engine versions and speeds.
+        """The parse methods' engine versions.
 
         ``GET /api/v1/parse-engines``: one :class:`~infratex.ParseEngine` per
         method, with its engine ``versions`` (``version``, ``status``
-        ``"stable"`` or ``"beta"``, and the ``default``) and its ``speeds``.
+        ``"stable"`` or ``"beta"``, and the ``default``).
         Use ``.get("standard-ultra-2")`` to look one method up. Available once
         the API release that adds the endpoint ships.
         """
@@ -518,7 +500,6 @@ class Documents:
                         "collection_id": document.collection_id,
                         "extraction_pages": document.extraction_pages,
                         "engine_version": document.engine_version,
-                        "speed": document.speed,
                     }
                 )
             if document.status == "error":
@@ -616,17 +597,6 @@ class Documents:
                     code="index_timeout",
                 )
             time.sleep(self._poll_interval_seconds)
-
-
-def _engine_fields(
-    engine_version: Optional[ParseEngineVersion], speed: Optional[ParseSpeed]
-) -> Dict[str, str]:
-    fields: Dict[str, str] = {}
-    if engine_version is not None:
-        fields["engine_version"] = engine_version
-    if speed is not None:
-        fields["speed"] = speed
-    return fields
 
 
 def _bool_param(value: Optional[bool]) -> Optional[str]:

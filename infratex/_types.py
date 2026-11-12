@@ -101,9 +101,6 @@ class Document(_Base):
     #: ``"2.5"``); ``None`` for methods without engine versions, and when the
     #: API does not send it.
     engine_version: Optional[str]
-    #: The parse speed (``"standard"`` or ``"fast"``); ``None`` for methods
-    #: without a speed choice, and when the API does not send it.
-    speed: Optional[str]
 
     def __init__(self, data: Dict[str, Any]) -> None:
         super().__init__(data)
@@ -111,7 +108,6 @@ class Document(_Base):
         raw_progress = data.get("progress")
         self.progress = DocumentProgress(raw_progress) if isinstance(raw_progress, dict) else None
         self.engine_version = data.get("engine_version")
-        self.speed = data.get("speed")
 
 
 class UploadedDocument(_Base):
@@ -126,8 +122,6 @@ class UploadedDocument(_Base):
     extraction_pages: Optional[List[Dict[str, Any]]]
     #: As :attr:`Document.engine_version`.
     engine_version: Optional[str]
-    #: As :attr:`Document.speed`.
-    speed: Optional[str]
 
 
 class DocumentList(_Base):
@@ -233,16 +227,14 @@ class ParseEngineVersionInfo(_Base):
 
 
 class ParseEngine(_Base):
-    """A parse method's engine versions and speeds."""
+    """A parse method's engine versions."""
 
     method: str
     versions: List[ParseEngineVersionInfo]
-    speeds: List[str]
 
     def __init__(self, data: Dict[str, Any]) -> None:
         super().__init__(data)
         self.versions = [ParseEngineVersionInfo(v) for v in data.get("versions") or []]
-        self.speeds = list(data.get("speeds") or [])
 
     @property
     def default_version(self) -> Optional[str]:
@@ -251,7 +243,7 @@ class ParseEngine(_Base):
 
 
 class ParseEngines:
-    """The parse methods' engine versions and speeds (``GET /api/v1/parse-engines``).
+    """The parse methods' engine versions (``GET /api/v1/parse-engines``).
 
     Iterate it for one :class:`ParseEngine` per method, or look one up with
     :meth:`get`.

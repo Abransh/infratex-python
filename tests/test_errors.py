@@ -11,9 +11,7 @@ from infratex import (
     InfratexError,
     InvalidEngineVersionError,
     InvalidPipelineError,
-    InvalidSpeedError,
     PipelineNotAvailableError,
-    SpeedNotSupportedError,
 )
 
 from .conftest import ClientFactory
@@ -147,11 +145,9 @@ def test_pipeline_not_available_is_typed(make_client: ClientFactory) -> None:
     [
         ("invalid_engine_version", InvalidEngineVersionError, ["2.0", "2.5"]),
         ("engine_version_not_supported", EngineVersionNotSupportedError, ["standard-ultra-2"]),
-        ("invalid_speed", InvalidSpeedError, ["standard", "fast"]),
-        ("speed_not_supported", SpeedNotSupportedError, ["standard-ultra-2"]),
     ],
 )
-def test_engine_version_and_speed_refusals_are_typed(
+def test_engine_version_refusals_are_typed(
     make_client: ClientFactory,
     tmp_path: Path,
     code: str,
@@ -187,11 +183,11 @@ def test_allowed_is_empty_without_details(make_client: ClientFactory, tmp_path: 
     pdf = tmp_path / "report.pdf"
     pdf.write_bytes(b"%PDF-1.7 test")
     client, _ = make_client(
-        _error(422, {"error": {"code": "speed_not_supported", "message": "Refused.", "details": None}})
+        _error(422, {"error": {"code": "engine_version_not_supported", "message": "Refused.", "details": None}})
     )
 
-    with pytest.raises(SpeedNotSupportedError) as excinfo:
-        client.documents.upload(str(pdf), method="max", speed="fast", wait=False)
+    with pytest.raises(EngineVersionNotSupportedError) as excinfo:
+        client.documents.upload(str(pdf), method="max", engine_version="2.5", wait=False)
 
     assert excinfo.value.allowed == []
 

@@ -8,9 +8,7 @@ from ._http import (
     InfratexError,
     InvalidEngineVersionError,
     InvalidPipelineError,
-    InvalidSpeedError,
     PipelineNotAvailableError,
-    SpeedNotSupportedError,
 )
 from ._signing import EVENT_ID_HEADER, SIGNATURE_HEADER, verify_webhook_signature
 from ._version import __version__
@@ -59,8 +57,6 @@ __all__ = [
     "EncryptedPDFError",
     "InvalidEngineVersionError",
     "EngineVersionNotSupportedError",
-    "InvalidSpeedError",
-    "SpeedNotSupportedError",
     "BinaryResponse",
     "verify_webhook_signature",
     "SIGNATURE_HEADER",

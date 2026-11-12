@@ -18,8 +18,6 @@ __all__ = [
     "EncryptedPDFError",
     "InvalidEngineVersionError",
     "EngineVersionNotSupportedError",
-    "InvalidSpeedError",
-    "SpeedNotSupportedError",
     "BinaryResponse",
 ]
 
@@ -140,24 +138,12 @@ class EngineVersionNotSupportedError(_AllowedValuesError):
     ``standard-ultra-2`` takes it."""
 
 
-class InvalidSpeedError(_AllowedValuesError):
-    """422 ``invalid_speed``: the upload's ``speed`` is not ``"standard"`` or
-    ``"fast"``. ``allowed`` lists the speeds the API accepts."""
-
-
-class SpeedNotSupportedError(_AllowedValuesError):
-    """422 ``speed_not_supported``: ``speed="fast"`` was sent with a parse
-    method that has no fast speed. Only ``standard-ultra-2`` takes it."""
-
-
 _ERRORS_BY_CODE: Dict[str, Type[InfratexError]] = {
     "invalid_pipeline": InvalidPipelineError,
     "pipeline_not_available": PipelineNotAvailableError,
     "encrypted_pdf": EncryptedPDFError,
     "invalid_engine_version": InvalidEngineVersionError,
     "engine_version_not_supported": EngineVersionNotSupportedError,
-    "invalid_speed": InvalidSpeedError,
-    "speed_not_supported": SpeedNotSupportedError,
 }
 
 
