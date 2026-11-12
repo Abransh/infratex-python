@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 class _Base:
@@ -97,12 +97,21 @@ class Document(_Base):
     #: Set while the document is ``pending`` or ``processing``; ``None`` once it
     #: is parsed or failed (and for a moment while processing starts).
     progress: Optional[DocumentProgress]
+    #: The parse engine version the document was parsed with (``"2.0"``,
+    #: ``"2.5"``); ``None`` for methods without engine versions, and when the
+    #: API does not send it.
+    engine_version: Optional[str]
+    #: The parse speed (``"standard"`` or ``"fast"``); ``None`` for methods
+    #: without a speed choice, and when the API does not send it.
+    speed: Optional[str]
 
     def __init__(self, data: Dict[str, Any]) -> None:
         super().__init__(data)
         self.indexes = [DocumentIndex(_coerce_index_payload(item)) for item in data.get("indexes", [])]
         raw_progress = data.get("progress")
         self.progress = DocumentProgress(raw_progress) if isinstance(raw_progress, dict) else None
+        self.engine_version = data.get("engine_version")
+        self.speed = data.get("speed")
 
 
 class UploadedDocument(_Base):
@@ -115,6 +124,10 @@ class UploadedDocument(_Base):
     extraction_ms: int
     collection_id: Optional[str]
     extraction_pages: Optional[List[Dict[str, Any]]]
+    #: As :attr:`Document.engine_version`.
+    engine_version: Optional[str]
+    #: As :attr:`Document.speed`.
+    speed: Optional[str]
 
 
 class DocumentList(_Base):
@@ -202,6 +215,65 @@ class DocumentLayout(_Base):
 
     def __len__(self) -> int:
         return len(self.pages)
+
+
+# ---------------------------------------------------------------------------
+# Parse engines
+# ---------------------------------------------------------------------------
+class ParseEngineVersionInfo(_Base):
+    """One engine version of a parse method.
+
+    ``status`` is ``"stable"`` or ``"beta"``; ``default`` is ``True`` for the
+    version an upload without ``engine_version`` runs.
+    """
+
+    version: str
+    status: str
+    default: bool
+
+
+class ParseEngine(_Base):
+    """A parse method's engine versions and speeds."""
+
+    method: str
+    versions: List[ParseEngineVersionInfo]
+    speeds: List[str]
+
+    def __init__(self, data: Dict[str, Any]) -> None:
+        super().__init__(data)
+        self.versions = [ParseEngineVersionInfo(v) for v in data.get("versions") or []]
+        self.speeds = list(data.get("speeds") or [])
+
+    @property
+    def default_version(self) -> Optional[str]:
+        """The version an upload without ``engine_version`` runs, if any."""
+        return next((v.version for v in self.versions if v.default), None)
+
+
+class ParseEngines:
+    """The parse methods' engine versions and speeds (``GET /api/v1/parse-engines``).
+
+    Iterate it for one :class:`ParseEngine` per method, or look one up with
+    :meth:`get`.
+    """
+
+    engines: List[ParseEngine]
+
+    def __init__(self, data: List[Dict[str, Any]]) -> None:
+        self.engines = [ParseEngine(e) for e in data]
+
+    def get(self, method: str) -> Optional[ParseEngine]:
+        """The engine of ``method`` (``"standard-ultra-2"``, ...), or ``None``."""
+        return next((e for e in self.engines if e.method == method), None)
+
+    def __iter__(self) -> Iterator[ParseEngine]:
+        return iter(self.engines)
+
+    def __len__(self) -> int:
+        return len(self.engines)
+
+    def __repr__(self) -> str:
+        return "ParseEngines({!r})".format(self.engines)
 
 
 # ---------------------------------------------------------------------------

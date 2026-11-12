@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Type
 
 import httpx
 import pytest
 
-from infratex import InfratexError, InvalidPipelineError, PipelineNotAvailableError
+from infratex import (
+    EngineVersionNotSupportedError,
+    InfratexError,
+    InvalidEngineVersionError,
+    InvalidPipelineError,
+    InvalidSpeedError,
+    PipelineNotAvailableError,
+    SpeedNotSupportedError,
+)
 
 from .conftest import ClientFactory
 
@@ -131,6 +140,60 @@ def test_pipeline_not_available_is_typed(make_client: ClientFactory) -> None:
     assert excinfo.value.requested_pipeline == "v2"
     assert excinfo.value.available_pipelines == ["legacy"]
     assert excinfo.value.request_id == "req-2"
+
+
+@pytest.mark.parametrize(
+    "code, error_class, allowed",
+    [
+        ("invalid_engine_version", InvalidEngineVersionError, ["2.0", "2.5"]),
+        ("engine_version_not_supported", EngineVersionNotSupportedError, ["standard-ultra-2"]),
+        ("invalid_speed", InvalidSpeedError, ["standard", "fast"]),
+        ("speed_not_supported", SpeedNotSupportedError, ["standard-ultra-2"]),
+    ],
+)
+def test_engine_version_and_speed_refusals_are_typed(
+    make_client: ClientFactory,
+    tmp_path: Path,
+    code: str,
+    error_class: Type[InfratexError],
+    allowed: List[str],
+) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    client, _ = make_client(
+        _error(
+            422,
+            {
+                "error": {
+                    "code": code,
+                    "message": "Refused.",
+                    "request_id": "req-4",
+                    "details": {"allowed": allowed},
+                }
+            },
+        )
+    )
+
+    with pytest.raises(error_class) as excinfo:
+        client.documents.upload(str(pdf), method="standard-ultra-2", engine_version="2.5", wait=False)
+
+    error = excinfo.value
+    assert isinstance(error, InfratexError)
+    assert (error.status_code, error.code, error.request_id) == (422, code, "req-4")
+    assert getattr(error, "allowed") == allowed
+
+
+def test_allowed_is_empty_without_details(make_client: ClientFactory, tmp_path: Path) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.7 test")
+    client, _ = make_client(
+        _error(422, {"error": {"code": "speed_not_supported", "message": "Refused.", "details": None}})
+    )
+
+    with pytest.raises(SpeedNotSupportedError) as excinfo:
+        client.documents.upload(str(pdf), method="max", speed="fast", wait=False)
+
+    assert excinfo.value.allowed == []
 
 
 def test_streamed_responses_raise_the_same_errors(make_client: ClientFactory) -> None:
